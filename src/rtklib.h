@@ -206,7 +206,7 @@ extern "C" {
 #define MAXDTOE_S   86400.0             /* max time difference to ephem toe (s) for other */
 #define MAXGDOP     300.0               /* max GDOP */
 
-#define INT_SWAP_TRAC 86400.0           /* swap interval of trace file (s) */
+#define INT_SWAP_TRAC 86400.0           /* swap interval of rtktrace file (s) */
 #define INT_SWAP_STAT 86400.0           /* swap interval of solution status file (s) */
 
 #define MAXEXFILE   1024                /* max number of expanded files */
@@ -1033,7 +1033,7 @@ typedef struct {        /* solution options type */
     int geoid;          /* geoid model (0:EGM96,1:JGD2000) */
     int solstatic;      /* solution of static mode (0:all,1:single) */
     int sstat;          /* solution statistics level (0:off,1:states,2:residuals) */
-    int trace;          /* debug trace level (0:off,1-5:debug) */
+    int rtktrace;          /* debug rtktrace level (0:off,1-5:debug) */
     double nmeaintv[2]; /* nmea output interval (s) (<0:no,0:all) */
                         /* nmeaintv[0]:gprmc,gpgga,nmeaintv[1]:gpgsv */
     char sep[64];       /* field separator */
@@ -1052,7 +1052,7 @@ typedef struct {        /* file options type */
     char tempdir[MAXSTRPATH]; /* ftp/http temporaly directory */
     char geexe  [MAXSTRPATH]; /* google earth exec file */
     char solstat[MAXSTRPATH]; /* solution statistics file */
-    char trace  [MAXSTRPATH]; /* debug trace file */
+    char rtktrace  [MAXSTRPATH]; /* debug rtktrace file */
 } filopt_t;
 
 typedef struct {        /* RINEX options type */
@@ -1291,7 +1291,7 @@ extern int  solve (const char *tr, const double *A, const double *Y, int n,
                    int m, double *X);
 extern int  lsq   (const double *A, const double *y, int n, int m, double *x,
                    double *Q);
-extern int  filter(double *x, double *P, const double *H, const double *v,
+extern int  rtkfilter(double *x, double *P, const double *H, const double *v,
                    const double *R, int n, int m);
 extern int  smoother(const double *xf, const double *Qf, const double *xb,
                      const double *Qb, int n, double *xs, double *Qs);
@@ -1358,11 +1358,11 @@ extern int  readblq(const char *file, const char *sta, double *odisp);
 extern int  readerp(const char *file, erp_t *erp);
 extern int  geterp (const erp_t *erp, gtime_t time, double *val);
 
-/* debug trace functions -----------------------------------------------------*/
+/* debug rtktrace functions -----------------------------------------------------*/
 extern void traceopen(const char *file);
 extern void traceclose(void);
 extern void tracelevel(int level);
-extern void trace    (int level, const char *format, ...);
+extern void rtktrace    (int level, const char *format, ...);
 extern void tracet   (int level, const char *format, ...);
 extern void tracemat (int level, const double *A, int n, int m, int p, int q);
 extern void traceobs (int level, const obsd_t *obs, int n);

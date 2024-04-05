@@ -159,7 +159,7 @@ opt_t sysopts[]={
     {"file-tempdir",    2,  (void *)&filopt_.tempdir,    ""     },
     {"file-geexefile",  2,  (void *)&filopt_.geexe,      ""     },
     {"file-solstatfile",2,  (void *)&filopt_.solstat,    ""     },
-    {"file-tracefile",  2,  (void *)&filopt_.trace,      ""     },
+    {"file-tracefile",  2,  (void *)&filopt_.rtktrace,      ""     },
     
     {"",0,NULL,""} /* terminator */
 };
@@ -216,7 +216,7 @@ extern opt_t *searchopt(const char *name, const opt_t *opts)
 {
     int i;
     
-    trace(3,"searchopt: name=%s\n",name);
+    rtktrace(3,"searchopt: name=%s\n",name);
     
     for (i=0;*opts[i].name;i++) {
         if (strstr(opts[i].name,name)) return (opt_t *)(opts+i);
@@ -250,7 +250,7 @@ extern int opt2str(const opt_t *opt, char *str)
 {
     char *p=str;
     
-    trace(3,"opt2str : name=%s\n",opt->name);
+    rtktrace(3,"opt2str : name=%s\n",opt->name);
     
     switch (opt->format) {
         case 0: p+=sprintf(p,"%d"   ,*(int   *)opt->var); break;
@@ -271,7 +271,7 @@ extern int opt2buf(const opt_t *opt, char *buff)
     char *p=buff;
     int n;
     
-    trace(3,"opt2buf : name=%s\n",opt->name);
+    rtktrace(3,"opt2buf : name=%s\n",opt->name);
     
     p+=sprintf(p,"%-18s =",opt->name);
     p+=opt2str(opt,p);
@@ -295,10 +295,10 @@ extern int loadopts(const char *file, opt_t *opts)
     char buff[2048],*p;
     int n=0;
     
-    trace(3,"loadopts: file=%s\n",file);
+    rtktrace(3,"loadopts: file=%s\n",file);
     
     if (!(fp=fopen(file,"r"))) {
-        trace(1,"loadopts: options file open error (%s)\n",file);
+        rtktrace(1,"loadopts: options file open error (%s)\n",file);
         return 0;
     }
     while (fgets(buff,sizeof(buff),fp)) {
@@ -340,10 +340,10 @@ extern int saveopts(const char *file, const char *mode, const char *comment,
     char buff[2048];
     int i;
     
-    trace(3,"saveopts: file=%s mode=%s\n",file,mode);
+    rtktrace(3,"saveopts: file=%s mode=%s\n",file,mode);
     
     if (!(fp=fopen(file,mode))) {
-        trace(1,"saveopts: options file open error (%s)\n",file);
+        rtktrace(1,"saveopts: options file open error (%s)\n",file);
         return 0;
     }
     if (comment) fprintf(fp,"# %s\n\n",comment);
@@ -455,7 +455,7 @@ extern void resetsysopts(void)
 {
     int i,j;
     
-    trace(3,"resetsysopts:\n");
+    rtktrace(3,"resetsysopts:\n");
     
     prcopt_=prcopt_default;
     solopt_=solopt_default;
@@ -466,7 +466,7 @@ extern void resetsysopts(void)
     filopt_.dcb    [0]='\0';
     filopt_.blq    [0]='\0';
     filopt_.solstat[0]='\0';
-    filopt_.trace  [0]='\0';
+    filopt_.rtktrace  [0]='\0';
     for (i=0;i<2;i++) antpostype_[i]=0;
     elmask_=15.0;
     elmaskar_=0.0;
@@ -486,7 +486,7 @@ extern void resetsysopts(void)
 *-----------------------------------------------------------------------------*/
 extern void getsysopts(prcopt_t *popt, solopt_t *sopt, filopt_t *fopt)
 {
-    trace(3,"getsysopts:\n");
+    rtktrace(3,"getsysopts:\n");
     
     buff2sysopts();
     if (popt) *popt=prcopt_;
@@ -504,7 +504,7 @@ extern void getsysopts(prcopt_t *popt, solopt_t *sopt, filopt_t *fopt)
 extern void setsysopts(const prcopt_t *prcopt, const solopt_t *solopt,
                        const filopt_t *filopt)
 {
-    trace(3,"setsysopts:\n");
+    rtktrace(3,"setsysopts:\n");
     
     resetsysopts();
     if (prcopt) prcopt_=*prcopt;
