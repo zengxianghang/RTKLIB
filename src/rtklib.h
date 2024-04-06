@@ -110,6 +110,30 @@ extern "C" {
 #define TSYS_QZS    4                   /* time system: QZSS time */
 #define TSYS_CMP    5                   /* time system: BeiDou time */
 
+#define NAV_LNAV 0x01
+#define NAV_FDMA 0x02
+#define NAV_FNAV 0x04
+#define NAV_INAV 0x08
+#define NAV_D1 0x10
+#define NAV_D2 0x20
+#define NAV_SBAS 0x40
+#define NAV_CNAV 0x80
+#define NAV_CNV1 0x100
+#define NAV_CNV2 0x200
+#define NAV_CNV3 0x400
+#define NAV_D1D2 0x800
+#define NAV_IFNV 0x1000
+#define NAV_CNVX 0x2000
+
+#define NAV_EPH 0x01
+#define NAV_STO 0x02
+#define NAV_EOP 0x04
+#define NAV_ION 0x08
+
+#define ION_LINE_CNT 4
+#define STO_LINE_CNT 3
+#define EOP_LINE_CNT 4
+
 #ifndef NFREQ
 #define NFREQ       3                   /* number of carrier frequencies */
 #endif
@@ -163,7 +187,7 @@ extern "C" {
 #endif
 #ifdef ENACMP
 #define MINPRNCMP   1                   /* min satellite sat number of BeiDou */
-#define MAXPRNCMP   35                  /* max satellite sat number of BeiDou */
+#define MAXPRNCMP   65                  /* max satellite sat number of BeiDou */
 #define NSATCMP     (MAXPRNCMP-MINPRNCMP+1) /* number of BeiDou satellites */
 #define NSYSCMP     1
 #else
@@ -780,6 +804,33 @@ typedef struct {        /* QZSS LEX ephemeris type */
     double isc[8];      /* ISC */
 } lexeph_t;
 
+typedef struct {
+    int data_type;
+    int sys;
+    int prn;
+    int msg_type;
+} nav_data_hdr_t;
+
+typedef struct { //see rinex4.01, table A32
+    nav_data_hdr_t hdr;
+    gtime_t trans_time;
+    double alpha[9]; //klo 8 para, gal 3 para, bdgim 9 para
+    double region;
+} ion_t;
+
+
+typedef struct { //see rinex4.01, table A30
+    nav_data_hdr_t hdr;
+    gtime_t ref_time;
+    
+} sto_t;
+
+typedef struct { //see rinex4.01, table A31
+    nav_data_hdr_t hdr;
+    gtime_t ref_time;
+    
+}eop_t;
+
 typedef struct {        /* QZSS LEX ionosphere correction type */
     gtime_t t0;         /* epoch time (GPST) */
     double tspan;       /* valid time span (s) */
@@ -796,6 +847,9 @@ typedef struct {        /* navigation data type */
     int na,namax;       /* number of almanac data */
     int nt,ntmax;       /* number of tec grid data */
     int nn,nnmax;       /* number of stec grid data */
+    int nion,nionmax;   //number of ion data
+    int neop,neopmax;
+    int nsto,nstomax;
     eph_t *eph;         /* GPS/QZS/GAL ephemeris */
     geph_t *geph;       /* GLONASS ephemeris */
     seph_t *seph;       /* SBAS ephemeris */
@@ -828,6 +882,9 @@ typedef struct {        /* navigation data type */
     ssr_t ssr[MAXSAT];  /* SSR corrections */
     lexeph_t lexeph[MAXSAT]; /* LEX ephemeris */
     lexion_t lexion;    /* LEX ionosphere correction */
+    ion_t *ion;
+    eop_t *eop;
+    sto_t *sto;
 } nav_t;
 
 typedef struct {        /* station parameter type */
@@ -1262,6 +1319,7 @@ extern const char *formatstrs[];        /* stream format strings */
 extern opt_t sysopts[];                 /* system options table */
 
 /* satellites, systems, codes functions --------------------------------------*/
+extern int str2sys(const char *id);
 extern int  satno   (int sys, int prn);
 extern int  satsys  (int sat, int *prn);
 extern int  satid2no(const char *id);
@@ -1273,6 +1331,9 @@ extern int  testsnr(int base, int freq, double el, double snr,
                     const snrmask_t *mask);
 extern void setcodepri(int sys, int freq, const char *pri);
 extern int  getcodepri(int sys, unsigned char code, const char *opt);
+extern int sysstr(int sys, char *str);
+
+extern void navmsgstr(int type, char *str);
 
 /* matrix and vector functions -----------------------------------------------*/
 extern double *mat  (int n, int m);

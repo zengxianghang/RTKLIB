@@ -444,6 +444,76 @@ extern int satid2no(const char *id)
     }
     return satno(sys,prn);
 }
+/* satellite id to satellite number --------------------------------------------
+* convert satellite id to satellite number
+* args   : char   *id       I   satellite id (nn,Gnn,Rnn,Enn,Jnn,Cnn or Snn)
+* return : satellite number (0: error)
+* notes  : 120-138 and 193-195 are also recognized as sbas and qzss
+*-----------------------------------------------------------------------------*/
+extern int str2sys(const char *id)
+{
+    int sys;
+    char code = id[0];
+    
+    switch (code) {
+        case 'G': sys=SYS_GPS; break;
+        case 'R': sys=SYS_GLO; break;
+        case 'E': sys=SYS_GAL; break;
+        case 'J': sys=SYS_QZS; break;
+        case 'C': sys=SYS_CMP; break;
+        case 'L': sys=SYS_LEO; break;
+        case 'S': sys=SYS_SBS; break;
+        default: return 0;
+    }
+    return sys;
+}
+
+/* satellite id to satellite number --------------------------------------------
+* convert satellite id to satellite number
+* args   : char   *id       I   satellite id (nn,Gnn,Rnn,Enn,Jnn,Cnn or Snn)
+* return : satellite number (0: error)
+* notes  : 120-138 and 193-195 are also recognized as sbas and qzss
+*-----------------------------------------------------------------------------*/
+extern int sysstr(int sys, char *id)
+{
+    char code = id[0];
+    
+    switch (sys) {
+        case SYS_GPS: strcpy(id, "GPS"); break;
+        case SYS_GLO: strcpy(id, "GLO"); break;
+        case SYS_GAL: strcpy(id, "GAL"); break;
+        case SYS_QZS: strcpy(id, "QZS"); break;
+        case SYS_CMP: strcpy(id, "BDS"); break;
+        case SYS_LEO: strcpy(id, "LEO"); break;
+        case SYS_SBS: strcpy(id, "SBS"); break;
+        default: return 0;
+    }
+    return sys;
+}
+
+extern void navmsgstr(int type, char *str)
+{
+    switch (type) {
+        case NAV_LNAV: strcpy(str, "LNAV"); break;
+        case NAV_FDMA: strcpy(str, "FDMA"); break;
+        case NAV_FNAV: strcpy(str, "FNAV"); break;
+        case NAV_INAV: strcpy(str, "INAV"); break;
+        case NAV_D1: strcpy(str, "D1"); break;
+        case NAV_D2: strcpy(str, "D2"); break;
+        case NAV_SBAS: strcpy(str, "SBAS"); break;
+        case NAV_CNAV: strcpy(str, "CNAV"); break;
+        case NAV_CNV1: strcpy(str, "CNV1"); break;
+        case NAV_CNV2: strcpy(str, "CNV2"); break;
+        case NAV_CNV3: strcpy(str, "CNV3"); break;
+        case NAV_D1D2: strcpy(str, "D1D2"); break;
+        case NAV_IFNV: strcpy(str, "IFNV"); break;
+        case NAV_CNVX: strcpy(str, "CNVX"); break;
+        
+        default: break;
+    }
+}
+
+
 /* satellite number to satellite id --------------------------------------------
 * convert satellite number to satellite id
 * args   : int    sat       I   satellite number

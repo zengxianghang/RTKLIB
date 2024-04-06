@@ -1183,15 +1183,201 @@ static int decode_seph(double ver, int sat, gtime_t toc, double *data,
     
     return 1;
 }
-/* read rinex navigation data body -------------------------------------------*/
-static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
-                       int *type, eph_t *eph, geph_t *geph, seph_t *seph)
-{
+static int read_nav_data_type(char *line) {
+    char type[4] = "";
+    strncpy(type, line, 3);
+    
+    if(!strcmp(type, "EPH"))
+        return NAV_EPH;
+    else if (!strcmp(type, "STO"))
+        return NAV_STO;
+    else if(!strcmp(type, "ION"))
+        return NAV_ION;
+    else if(!strcmp(type, "EOP"))
+        return NAV_EOP;
+    
+    return 0;
+}
+static int read_nav_msg_type(char *line) {
+    char type[5] = "";
+    strncpy(type, line, 4);
+    
+    if(!strcmp(type, "LNAV"))
+        return NAV_LNAV;
+    else if (!strcmp(type, "FDMA"))
+        return NAV_FDMA;
+    else if(!strcmp(type, "FNAV"))
+        return NAV_FNAV;
+    else if(!strcmp(type, "INAV"))
+        return NAV_INAV;
+    else if (!strcmp(type, "D1"))
+        return NAV_D1;
+    else if(!strcmp(type, "D2"))
+        return NAV_D2;
+    else if(!strcmp(type, "SBAS"))
+        return NAV_SBAS;
+    else if (!strcmp(type, "CNAV"))
+        return NAV_CNAV;
+    else if(!strcmp(type, "CNV1"))
+        return NAV_CNV1;
+    else if(!strcmp(type, "CNV2"))
+        return NAV_CNV2;
+    else if (!strcmp(type, "CNV3"))
+        return NAV_CNV3;
+    else if (!strcmp(type, "D1D2"))
+        return NAV_D1D2;
+    else if (!strcmp(type, "IFNV"))
+        return NAV_IFNV;
+    else if (!strcmp(type, "CNVX"))
+        return NAV_CNVX;
+    
+    return 0;
+}
+
+/*
+ return :
+ 0: normal exit
+ 1: the sto body not compelete
+ 2: end of file
+ */
+static int readstobody(FILE *fp, char *buff, const char *opt, double ver, int sys,
+                       int *type, eph_t *eph, geph_t *geph, seph_t *seph) {
+    int line_num = 1;
+    //decode sto line 1
+    
+    line_num += 1;
+    
+    while(fgets(buff,MAXRNXLEN,fp)) {
+        if(buff[0] == '>')
+            return 1;
+        if(line_num == 2) {
+            //decode sto line 2
+            
+        }else if(line_num == 3){
+            //decode sto line 3
+            
+        }
+        
+        line_num +=1;
+        if(line_num > STO_LINE_CNT) {
+            return 0;
+        }
+    }
+    
+    return 2;
+}
+
+
+static void decode_record_hdr(char *buff, nav_data_hdr_t *hdr) {
+    hdr->data_type = read_nav_data_type(&buff[2]);
+    hdr->sys = str2sys(&buff[6]);
+    hdr->prn = (int)str2num(&buff[7], 0, 2);
+    hdr->msg_type = read_nav_msg_type(&buff[10]);
+}
+
+
+/*
+ return :
+ 0: normal exit
+ 1: the ion body not compelete
+ 2: end of file
+ 3:
+ */
+static int readionbody(FILE *fp, char *buff, ion_t *ion) {
+    char id[8] = "";
+    int line_num = 1;
+    int j = 0;
+    int sp = 4;
+    char *p = NULL;
+    int data_idx = 0;
+    int max_line_cnt = ION_LINE_CNT;
+    
+    memset(ion, 0, sizeof(ion_t));
+    //decode ion line 1
+    strncpy(id, &buff[7], 2);
+    ion->hdr.sys = str2sys(&buff[6]);
+    if(ion->hdr.sys == SYS_GAL)
+        max_line_cnt = 3;
+    ion->hdr.prn = (int)str2num(&buff[7], 0, 2);
+    ion->hdr.msg_type = read_nav_msg_type(&buff[10]);
+    line_num += 1;
+    
+    while(fgets(buff,MAXRNXLEN,fp)) {
+        if(buff[0] == '>')
+            return 1;
+        if(line_num > 1) {
+            if (line_num == 2) {
+                if (str2time(buff+sp,0,19,&(ion->trans_time))) {
+                    rtktrace(2,"rinex nav ion transmit time error: %23.23s\n",buff);
+                    return 3;
+                }
+                p = buff + 19;
+            } else {
+                p = buff;
+            }
+            
+            /* decode data fields */
+            for (j=0,p=p+sp;j<4;j++,p+=19) {
+                if (*p == '\n')
+                    break;
+                ion->alpha[data_idx]=str2num(p,0,19);
+                data_idx += 1;
+            }
+        }
+        
+        line_num += 1;
+        if(line_num > max_line_cnt) {
+            return 0;
+        }
+    }
+    
+    return 2;
+}
+
+
+/*
+ return :
+ 0: normal exit
+ 1: the eop body not compelete
+ 2: end of file
+ */
+static int readeopbody(FILE *fp, char *buff, const char *opt, double ver, int sys,
+                       int *type, eph_t *eph, geph_t *geph, seph_t *seph) {
+    int line_num = 1;
+    //decode ion line 1
+    
+    line_num += 1;
+    
+    while(fgets(buff,MAXRNXLEN,fp)) {
+        if(buff[0] == '>')
+            return 1;
+        if(line_num == 2) {
+            //decode eop line 2
+            
+        }else if(line_num == 3) {
+            //decode eop line 3
+            
+        } else if(line_num == 4) {
+            
+        }
+        
+        line_num +=1;
+        if(line_num > EOP_LINE_CNT) {
+            return 0;
+        }
+    }
+    
+    return 2;
+}
+
+
+static int readephbody(FILE *fp, const char *opt, double ver, int sys,
+                       int *type, eph_t *eph, geph_t *geph, seph_t *seph) {
     gtime_t toc;
     double data[64];
     int i=0,j,prn,sat=0,sp=3,mask;
     char buff[MAXRNXLEN],id[8]="",*p;
-    
+   
     rtktrace(4,"readrnxnavb: ver=%.2f sys=%d\n",ver,sys);
     
     /* set system mask */
@@ -1255,6 +1441,48 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
             }
         }
     }
+
+    return -1;
+
+}
+
+/* read rinex navigation data body -------------------------------------------*/
+static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
+                       int *type, eph_t *eph, geph_t *geph, seph_t *seph,
+                       sto_t *sto, eop_t *eop, ion_t *ion)
+{
+    int mask;
+    char buff[MAXRNXLEN];
+   
+    rtktrace(4,"readrnxnavb: ver=%.2f sys=%d\n",ver,sys);
+    
+    /* set system mask */
+    mask=set_sysmask(opt);
+    if (ver >= 4.0) {
+        while (fgets(buff,MAXRNXLEN,fp)) {
+            if(buff[0] == '>') { //bugs in here
+                int data_type = read_nav_data_type(&buff[2]);
+                if (data_type == NAV_STO) {
+                    *type = 5;
+                    return 0;
+                }
+                else if(data_type == NAV_ION) {
+                    *type = 4;
+                    return (!readionbody(fp, buff, ion));
+                }
+                else if (data_type == NAV_EOP) {
+                    *type = 3;
+                    return 0;
+                }
+                else if (data_type == NAV_EPH) {
+                    return readephbody(fp, opt, ver, sys, type, eph, geph, seph);
+                }
+            }
+        }
+    }
+    else {
+        return readephbody(fp, opt, ver, sys, type, eph, geph, seph);
+    }
     return -1;
 }
 /* add ephemeris to navigation data ------------------------------------------*/
@@ -1290,6 +1518,54 @@ static int add_geph(nav_t *nav, const geph_t *geph)
     nav->geph[nav->ng++]=*geph;
     return 1;
 }
+static int add_ion(nav_t *nav, const ion_t *ion)
+{
+    ion_t *nav_ion;
+    
+    if (nav->nionmax<=nav->nion) {
+        nav->nionmax+=1024;
+        if (!(nav_ion=(ion_t *)realloc(nav->ion,sizeof(ion_t)*nav->nionmax))) {
+            rtktrace(1,"decode_ion malloc error: n=%d\n",nav->nionmax);
+            free(nav->ion); nav->ion=NULL; nav->nion=nav->nionmax=0;
+            return 0;
+        }
+        nav->ion=nav_ion;
+    }
+    nav->ion[nav->nion++]=*ion;
+    return 1;
+}
+static int add_eop(nav_t *nav, const eop_t *eop)
+{
+    eop_t *nav_eop;
+    
+    if (nav->neopmax<=nav->neop) {
+        nav->neopmax+=1024;
+        if (!(nav_eop=(eop_t *)realloc(nav->eop,sizeof(eop_t)*nav->neopmax))) {
+            rtktrace(1,"decode_eop malloc error: n=%d\n",nav->neopmax);
+            free(nav->eop); nav->eop=NULL; nav->neop=nav->neopmax=0;
+            return 0;
+        }
+        nav->eop=nav_eop;
+    }
+    nav->eop[nav->neop++]=*eop;
+    return 1;
+}
+static int add_sto(nav_t *nav, const sto_t *sto)
+{
+    sto_t *nav_sto;
+    
+    if (nav->nstomax<=nav->nsto) {
+        nav->nstomax+=1024;
+        if (!(nav_sto=(sto_t *)realloc(nav->sto,sizeof(sto_t)*nav->nstomax))) {
+            rtktrace(1,"decode_sto malloc error: n=%d\n",nav->nstomax);
+            free(nav->sto); nav->sto=NULL; nav->nsto=nav->nstomax=0;
+            return 0;
+        }
+        nav->sto=nav_sto;
+    }
+    nav->sto[nav->ng++]=*sto;
+    return 1;
+}
 static int add_seph(nav_t *nav, const seph_t *seph)
 {
     seph_t *nav_seph;
@@ -1314,19 +1590,25 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
     geph_t geph;
     seph_t seph;
     int stat,type;
+    sto_t sto;
+    eop_t eop;
+    ion_t ion;
     
     rtktrace(3,"readrnxnav: ver=%.2f sys=%d\n",ver,sys);
     
     if (!nav) return 0;
     
     /* read rinex navigation data body */
-    while ((stat=readrnxnavb(fp,opt,ver,sys,&type,&eph,&geph,&seph))>=0) {
+    while ((stat=readrnxnavb(fp,opt,ver,sys,&type,&eph,&geph,&seph, &sto, &eop, &ion))>=0) {
         
         /* add ephemeris to navigation data */
         if (stat) {
             switch (type) {
                 case 1 : stat=add_geph(nav,&geph); break;
                 case 2 : stat=add_seph(nav,&seph); break;
+                case 3 : stat=add_eop(nav, &eop); break;
+                case 4 : stat=add_ion(nav, &ion); break;
+                case 5 : stat=add_sto(nav, &sto); break;
                 default: stat=add_eph (nav,&eph ); break;
             }
             if (!stat) return 0;
@@ -1510,6 +1792,7 @@ extern int readrnxt(const char *file, int rcv, gtime_t ts, gtime_t te,
     /* read rinex files */
     for (i=0;i<n&&stat>=0;i++) {
         stat=readrnxfile(files[i],ts,te,tint,opt,0,rcv,&type,obs,nav,sta);
+        
     }
     /* if station name empty, set 4-char name from file head */
     if (type=='O'&&sta) {
@@ -1717,6 +2000,9 @@ extern int input_rnxctr(rnxctr_t *rnx, FILE *fp)
     geph_t geph={0};
     seph_t seph={0};
     int n,sys,stat,flag,prn,type;
+    sto_t sto;
+    eop_t eop;
+    ion_t ion;
     
     rtktrace(4,"input_rnxctr:\n");
     
@@ -1740,7 +2026,7 @@ extern int input_rnxctr(rnxctr_t *rnx, FILE *fp)
         case 'J': sys=SYS_QZS ; break; /* extension */
         default: return 0;
     }
-    if ((stat=readrnxnavb(fp,rnx->opt,rnx->ver,sys,&type,&eph,&geph,&seph))<=0) {
+    if ((stat=readrnxnavb(fp,rnx->opt,rnx->ver,sys,&type,&eph,&geph,&seph, &sto, &eop, &ion))<=0) {
         return stat<0?-2:0;
     }
     if (type==1) {
