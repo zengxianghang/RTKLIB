@@ -44,6 +44,13 @@
 extern "C" {
 #endif
 
+#define ENAGPS
+#define ENAGLO
+#define ENAGAL
+#define ENACMP
+#define ENAQZS
+#define ENAIRN
+
 /* constants -----------------------------------------------------------------*/
 
 #define VER_RTKLIB  "2.4.2"             /* library version */
@@ -207,13 +214,24 @@ extern "C" {
 #define NSATLEO     0
 #define NSYSLEO     0
 #endif
-#define NSYS        (NSYSGPS+NSYSGLO+NSYSGAL+NSYSQZS+NSYSCMP+NSYSLEO) /* number of systems */
+#ifdef ENAIRN
+#define MINPRNIRN   1                   /* min satellite sat number of IRN */
+#define MAXPRNIRN   10                  /* max satellite sat number of IRN */
+#define NSATIRN     (MAXPRNIRN-MINPRNIRN+1) /* number of IRN satellites */
+#define NSYSIRN     1
+#else
+#define MINPRNIRN   0
+#define MAXPRNIRN   0
+#define NSATIRN     0
+#define NSYSIRN     0
+#endif
+#define NSYS        (NSYSGPS+NSYSGLO+NSYSGAL+NSYSQZS+NSYSCMP+NSYSLEO+NSYSIRN) /* number of systems */
 
 #define MINPRNSBS   120                 /* min satellite PRN number of SBAS */
 #define MAXPRNSBS   142                 /* max satellite PRN number of SBAS */
 #define NSATSBS     (MAXPRNSBS-MINPRNSBS+1) /* number of SBAS satellites */
 
-#define MAXSAT      (NSATGPS+NSATGLO+NSATGAL+NSATQZS+NSATCMP+NSATSBS+NSATLEO)
+#define MAXSAT      (NSATGPS+NSATGLO+NSATGAL+NSATQZS+NSATCMP+NSATSBS+NSATLEO+NSATIRN)
                                         /* max satellite number (1 to MAXSAT) */
 #ifndef MAXOBS
 #define MAXOBS      64                  /* max number of obs in an epoch */
@@ -1332,8 +1350,10 @@ extern int  testsnr(int base, int freq, double el, double snr,
 extern void setcodepri(int sys, int freq, const char *pri);
 extern int  getcodepri(int sys, unsigned char code, const char *opt);
 extern int sysstr(int sys, char *str);
+extern int sysstr2(int sys, char *str);
 
 extern void navmsgstr(int type, char *str);
+extern void navdatastr(int type, char *str);
 
 /* matrix and vector functions -----------------------------------------------*/
 extern double *mat  (int n, int m);
@@ -1363,6 +1383,7 @@ extern void matfprint(const double *A, int n, int m, int p, int q, FILE *fp);
 extern double  str2num(const char *s, int i, int n);
 extern int     str2time(const char *s, int i, int n, gtime_t *t);
 extern void    time2str(gtime_t t, char *str, int n);
+extern void    time2str2(gtime_t t, char *str, int n);
 extern gtime_t epoch2time(const double *ep);
 extern void    time2epoch(gtime_t t, double *ep);
 extern gtime_t gpst2time(int week, double sec);
@@ -1523,6 +1544,8 @@ extern void free_rnxctr (rnxctr_t *rnx);
 extern int  open_rnxctr (rnxctr_t *rnx, FILE *fp);
 extern int  input_rnxctr(rnxctr_t *rnx, FILE *fp);
 
+extern int writernx(const char *file, int rcv, const char *opt, obs_t *obs,
+                    nav_t *nav, sta_t *sta);
 /* ephemeris and clock functions ---------------------------------------------*/
 extern double eph2clk (gtime_t time, const eph_t  *eph);
 extern double geph2clk(gtime_t time, const geph_t *geph);

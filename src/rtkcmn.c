@@ -439,6 +439,7 @@ extern int satid2no(const char *id)
         case 'J': sys=SYS_QZS; prn+=MINPRNQZS-1; break;
         case 'C': sys=SYS_CMP; prn+=MINPRNCMP-1; break;
         case 'L': sys=SYS_LEO; prn+=MINPRNLEO-1; break;
+        case 'I': sys=SYS_IRN; prn+=MINPRNIRN-1; break;
         case 'S': sys=SYS_SBS; prn+=100; break;
         default: return 0;
     }
@@ -491,6 +492,22 @@ extern int sysstr(int sys, char *id)
     return sys;
 }
 
+extern int sysstr2(int sys, char *id)
+{
+    switch (sys) {
+        case SYS_GPS: strcpy(id, "G"); break;
+        case SYS_GLO: strcpy(id, "R"); break;
+        case SYS_GAL: strcpy(id, "E"); break;
+        case SYS_QZS: strcpy(id, "J"); break;
+        case SYS_CMP: strcpy(id, "C"); break;
+        case SYS_LEO: strcpy(id, "L"); break;
+        case SYS_SBS: strcpy(id, "S"); break;
+        case SYS_IRN: strcpy(id, "I"); break;
+        default: return 0;
+    }
+    return sys;
+}
+
 extern void navmsgstr(int type, char *str)
 {
     switch (type) {
@@ -513,6 +530,17 @@ extern void navmsgstr(int type, char *str)
     }
 }
 
+extern void navdatastr(int type, char *str)
+{
+    switch (type) {
+        case NAV_ION: strcpy(str, "ION"); break;
+        case NAV_EPH: strcpy(str, "EPH"); break;
+        case NAV_EOP: strcpy(str, "EOP"); break;
+        case NAV_STO: strcpy(str, "STO"); break;
+       
+        default: break;
+    }
+}
 
 /* satellite number to satellite id --------------------------------------------
 * convert satellite number to satellite id
@@ -1586,6 +1614,23 @@ extern void time2str(gtime_t t, char *s, int n)
     if (1.0-t.sec<0.5/pow(10.0,n)) {t.time++; t.sec=0.0;};
     time2epoch(t,ep);
     sprintf(s,"%04.0f/%02.0f/%02.0f %02.0f:%02.0f:%0*.*f",ep[0],ep[1],ep[2],
+            ep[3],ep[4],n<=0?2:n+3,n<=0?0:n,ep[5]);
+}
+/* time to string --------------------------------------------------------------
+* convert gtime_t struct to string
+* args   : gtime_t t        I   gtime_t struct
+*          char   *s        O   string ("yyyy mm dd hh mm ss.ssss")
+*          int    n         I   number of decimals
+* return : none
+*-----------------------------------------------------------------------------*/
+extern void time2str2(gtime_t t, char *s, int n)
+{
+    double ep[6];
+    
+    if (n<0) n=0; else if (n>12) n=12;
+    if (1.0-t.sec<0.5/pow(10.0,n)) {t.time++; t.sec=0.0;};
+    time2epoch(t,ep);
+    sprintf(s,"%04.0f %02.0f %02.0f %02.0f %02.0f %0*.*f",ep[0],ep[1],ep[2],
             ep[3],ep[4],n<=0?2:n+3,n<=0?0:n,ep[5]);
 }
 /* get time string -------------------------------------------------------------
