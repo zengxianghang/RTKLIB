@@ -628,6 +628,78 @@ static int readrnxh(FILE *fp, double *ver, char *type, int *sys, int *tsys,
     }
     return 0;
 }
+static int writernxh(FILE *fp, double *ver, char *type, int *sys, int *tsys,
+                    char tobs[][MAXOBSTYPE][4], nav_t *nav, sta_t *sta)
+{
+    return 1;
+    double bias;
+    char buff[MAXRNXLEN],*label=buff+60;
+    int i=0,block=0,sat;
+    
+    rtktrace(3,"readrnxh:\n");
+    
+    *ver=2.10; *type=' '; *sys=SYS_GPS; *tsys=TSYS_GPS;
+    
+    while (fgets(buff,MAXRNXLEN,fp)) {
+        
+        if (strlen(buff)<=60) continue;
+        
+        else if (strstr(label,"RINEX VERSION / TYPE")) {
+            *ver=str2num(buff,0,9);
+            *type=*(buff+20);
+            
+            /* satellite system */
+            switch (*(buff+40)) {
+                case ' ':
+                case 'G': *sys=SYS_GPS;  *tsys=TSYS_GPS; break;
+                case 'R': *sys=SYS_GLO;  *tsys=TSYS_UTC; break;
+                case 'E': *sys=SYS_GAL;  *tsys=TSYS_GAL; break; /* v.2.12 */
+                case 'S': *sys=SYS_SBS;  *tsys=TSYS_GPS; break;
+                case 'J': *sys=SYS_QZS;  *tsys=TSYS_QZS; break; /* v.3.02 */
+                case 'C': *sys=SYS_CMP;  *tsys=TSYS_CMP; break; /* v.2.12 */
+                case 'M': *sys=SYS_NONE; *tsys=TSYS_GPS; break; /* mixed */
+                default :
+                    rtktrace(2,"not supported satellite system: %c\n",*(buff+40));
+                    break;
+            }
+            continue;
+        }
+        else if (strstr(label,"PGM / RUN BY / DATE")) continue;
+        else if (strstr(label,"COMMENT")) { /* opt */
+            
+            /* read cnes wl satellite fractional bias */
+            if (strstr(buff,"WIDELANE SATELLITE FRACTIONAL BIASES")||
+                strstr(buff,"WIDELANE SATELLITE FRACTIONNAL BIASES")) {
+                block=1;
+            }
+            else if (block) {
+                /* cnes/cls grg clock */
+                if (!strncmp(buff,"WL",2)&&(sat=satid2no(buff+3))&&
+                    sscanf(buff+40,"%lf",&bias)==1) {
+                    nav->wlbias[sat-1]=bias;
+                }
+                /* cnes ppp-wizard clock */
+                else if ((sat=satid2no(buff+1))&&sscanf(buff+6,"%lf",&bias)==1) {
+                    nav->wlbias[sat-1]=bias;
+                }
+            }
+            continue;
+        }
+        /* file type */
+        switch (*type) {
+            case 'O': decode_obsh(fp,buff,*ver,tsys,tobs,nav,sta); break;
+            case 'N': decode_navh (buff,nav); break;
+            case 'G': decode_gnavh(buff,nav); break;
+            case 'H': decode_hnavh(buff,nav); break;
+            case 'J': decode_navh (buff,nav); break; /* extension */
+            case 'L': decode_navh (buff,nav); break; /* extension */
+        }
+        if (strstr(label,"END OF HEADER")) return 1;
+        
+        if (++i>=MAXPOSHEAD&&*type==' ') break; /* no rinex file */
+    }
+    return 0;
+}
 /* decode obs epoch ----------------------------------------------------------*/
 static int decode_obsepoch(FILE *fp, char *buff, double ver, gtime_t *time,
                            int *flag, int *sats)
@@ -1001,6 +1073,51 @@ static int readrnxobs(FILE *fp, gtime_t ts, gtime_t te, double tint,
     
     return stat;
 }
+static int writernxobs(FILE *fp, gtime_t ts, gtime_t te, double tint,
+                      const char *opt, int rcv, double ver, int tsys,
+                      char tobs[][MAXOBSTYPE][4], obs_t *obs)
+{
+    obsd_t *data;
+    unsigned char slips[MAXSAT][NFREQ]={{0}};
+    int i,n,flag=0,stat=0;
+    
+    rtktrace(4,"readrnxobs: rcv=%d ver=%.2f tsys=%d\n",rcv,ver,tsys);
+    
+    if (!obs||rcv>MAXRCV) return 0;
+    
+    if (!(data=(obsd_t *)malloc(sizeof(obsd_t)*MAXOBS))) return 0;
+    
+    /* read rinex obs data body */
+    while ((n=readrnxobsb(fp,opt,ver,tobs,&flag,data))>=0&&stat>=0) {
+        
+        for (i=0;i<n;i++) {
+            
+            /* utc -> gpst */
+            if (tsys==TSYS_UTC) data[i].time=utc2gpst(data[i].time);
+            
+            /* save cycle-slip */
+            saveslips(slips,data+i);
+        }
+        /* screen data by time */
+        if (n>0&&!screent(data[0].time,ts,te,tint)) continue;
+        
+        for (i=0;i<n;i++) {
+            
+            /* restore cycle-slip */
+            restslips(slips,data+i);
+            
+            data[i].rcv=(unsigned char)rcv;
+            
+            /* save obs data */
+            if ((stat=addobsdata(obs,data+i))<0) break;
+        }
+    }
+    rtktrace(4,"readrnxobs: nobs=%d stat=%d\n",obs->n,stat);
+    
+    free(data);
+    
+    return stat;
+}
 /* decode ephemeris ----------------------------------------------------------*/
 static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
                       eph_t *eph)
@@ -1293,6 +1410,7 @@ static int readionbody(FILE *fp, char *buff, ion_t *ion) {
     int max_line_cnt = ION_LINE_CNT;
     
     memset(ion, 0, sizeof(ion_t));
+    ion->hdr.data_type = NAV_ION;
     //decode ion line 1
     strncpy(id, &buff[7], 2);
     ion->hdr.sys = str2sys(&buff[6]);
@@ -1320,7 +1438,10 @@ static int readionbody(FILE *fp, char *buff, ion_t *ion) {
             for (j=0,p=p+sp;j<4;j++,p+=19) {
                 if (*p == '\n')
                     break;
-                ion->alpha[data_idx]=str2num(p,0,19);
+                if(ion->hdr.sys == SYS_GAL && data_idx == 3)
+                    ion->region=str2num(p,0,19);
+                else
+                    ion->alpha[data_idx]=str2num(p,0,19);
                 data_idx += 1;
             }
         }
@@ -1332,6 +1453,44 @@ static int readionbody(FILE *fp, char *buff, ion_t *ion) {
     }
     
     return 2;
+}
+
+static void writeionbody(FILE *fp, ion_t *ion) {
+    char time_str[100] = "";
+    int sys = ion->hdr.sys;
+    
+    if(!fp) return ;
+    
+    time2str2(ion->trans_time, time_str, 0);
+    fprintf(fp, "    %s", time_str);
+    
+    if(sys == SYS_GPS || sys == SYS_IRN || sys == SYS_QZS
+       || (sys == SYS_CMP && ion->hdr.msg_type == NAV_D1D2))
+    {
+        fprintf(fp, "%19.12e%19.12e%19.12e\n"
+                "    %19.12e%19.12e%19.12e%19.12e\n"
+                "    %19.12e\n",
+                ion->alpha[0], ion->alpha[1], ion->alpha[2],
+                ion->alpha[3], ion->alpha[4], ion->alpha[5], ion->alpha[6],
+                ion->alpha[7]);
+    }
+    else if(sys == SYS_GAL)
+    {
+        fprintf(fp, "%19.12e%19.12e%19.12e\n"
+                "    %19.12e\n",
+                ion->alpha[0], ion->alpha[1], ion->alpha[2],
+                ion->region);
+    }
+    else if(sys == SYS_CMP && ion->hdr.msg_type == NAV_CNVX)
+    {
+        fprintf(fp, "%19.12e%19.12e%19.12e\n"
+                "    %19.12e%19.12e%19.12e%19.12e\n"
+                "    %19.12e%19.12e\n",
+                ion->alpha[0], ion->alpha[1], ion->alpha[2],
+                ion->alpha[3], ion->alpha[4], ion->alpha[5], ion->alpha[6],
+                ion->alpha[7], ion->alpha[8]);
+    }
+    
 }
 
 
@@ -1485,6 +1644,44 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
     }
     return -1;
 }
+static void writernxnavhdr(FILE *fp, nav_data_hdr_t *hdr)
+{
+    char msg_str[5] = "";
+    char data_str[5] = "";
+    char sys_str[5] = "";
+    
+    if(!fp) return ;
+    
+    navmsgstr(hdr->msg_type, msg_str);
+    navdatastr(hdr->data_type, data_str);
+    sysstr2(hdr->sys, sys_str);
+    
+    fprintf(fp, "> %s %s%02d %s\n", data_str, sys_str,hdr->prn, msg_str);
+}
+static void writernxion(FILE *fp, ion_t *ion)
+{
+    if(!fp) return;
+    
+    writernxnavhdr(fp, &ion->hdr);
+    writeionbody(fp, ion);
+}
+static void writernxnavb(FILE *fp, nav_t *nav)
+{
+    int i;
+    if(!fp) return;
+    
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    for(i=0;i<nav->neop;i++)
+    {}
+    for(i=0;i<nav->nsto;i++)
+    {}
+    for(i=0;i<nav->nion;i++)
+        writernxion(fp, &nav->ion[i]);
+    
+    for(i=0;i<nav->n;i++)
+    { }
+    
+}
 /* add ephemeris to navigation data ------------------------------------------*/
 static int add_eph(nav_t *nav, const eph_t *eph)
 {
@@ -1604,16 +1801,34 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
         /* add ephemeris to navigation data */
         if (stat) {
             switch (type) {
-                case 1 : stat=add_geph(nav,&geph); break;
-                case 2 : stat=add_seph(nav,&seph); break;
+                case 1 : stat=add_geph(nav, &geph); break;
+                case 2 : stat=add_seph(nav, &seph); break;
                 case 3 : stat=add_eop(nav, &eop); break;
                 case 4 : stat=add_ion(nav, &ion); break;
                 case 5 : stat=add_sto(nav, &sto); break;
-                default: stat=add_eph (nav,&eph ); break;
+                default: stat=add_eph(nav, &eph); break;
             }
             if (!stat) return 0;
         }
     }
+    return nav->n>0||nav->ng>0||nav->ns>0;
+}
+static int writernxnav(FILE *fp, const char *opt, double ver, int sys,
+                      nav_t *nav)
+{
+    eph_t eph;
+    geph_t geph;
+    seph_t seph;
+    int stat,type;
+    sto_t sto;
+    eop_t eop;
+    ion_t ion;
+    
+    rtktrace(3,"readrnxnav: ver=%.2f sys=%d\n",ver,sys);
+    
+    if (!nav) return 0;
+    writernxnavb(fp, nav);
+   
     return nav->n>0||nav->ng>0||nav->ns>0;
 }
 /* read rinex clock ----------------------------------------------------------*/
@@ -1700,6 +1915,35 @@ static int readrnxfp(FILE *fp, gtime_t ts, gtime_t te, double tint,
     rtktrace(2,"unsupported rinex type ver=%.2f type=%c\n",ver,*type);
     return 0;
 }
+/* write rinex file -----------------------------------------------------------*/
+static int writernxfp(FILE *fp, gtime_t ts, gtime_t te, double tint,
+                     const char *opt, int flag, int index, char *type,
+                     obs_t *obs, nav_t *nav, sta_t *sta)
+{
+    double ver = 4.01;
+    int sys,tsys;
+    char tobs[NUMSYS][MAXOBSTYPE][4]={{""}};
+    
+    rtktrace(3,"writernxfp: flag=%d index=%d\n",flag,index);
+    if(obs != NULL && nav != NULL)
+    {
+        rtktrace(2,"cannot write obs and nav in same rinex file\n");
+        return 0;
+    }
+    
+    if(obs)
+    {
+        if (!writernxh(fp,&ver,type,&sys,&tsys,tobs,nav,sta)) return 0;
+        return writernxobs(fp,ts,te,tint,opt,index,ver,tsys,tobs,obs);
+    }
+    if(nav)
+    {
+        if (!writernxh(fp,&ver,type,&sys,&tsys,tobs,nav,sta)) return 0;
+        return writernxnav(fp,opt,ver,sys,nav);
+    }
+    
+    return 0;
+}
 /* uncompress and read rinex file --------------------------------------------*/
 static int readrnxfile(const char *file, gtime_t ts, gtime_t te, double tint,
                        const char *opt, int flag, int index, char *type,
@@ -1729,6 +1973,23 @@ static int readrnxfile(const char *file, gtime_t ts, gtime_t te, double tint,
     
     /* delete temporary file */
     if (cstat) remove(tmpfile);
+    
+    return stat;
+}
+static int writernxfile(const char *file, gtime_t ts, gtime_t te, double tint,
+                       const char *opt, int flag, int index, char *type,
+                       obs_t *obs, nav_t *nav, sta_t *sta)
+{
+    FILE *fp;
+    
+    if (!(fp=fopen(file,"w"))) {
+        rtktrace(2,"rinex file open error: %s\n",file);
+        return 0;
+    }
+    /* read rinex file */
+    int stat=writernxfp(fp,ts,te,tint,opt,flag,index,type,obs,nav,sta);
+    
+    fclose(fp);
     
     return stat;
 }
@@ -1803,6 +2064,15 @@ extern int readrnxt(const char *file, int rcv, gtime_t ts, gtime_t te,
     
     return stat;
 }
+extern int writernxt(const char *file, int rcv, gtime_t ts, gtime_t te,
+                    double tint, const char *opt, obs_t *obs, nav_t *nav,
+                    sta_t *sta)
+{
+   
+   int stat=writernxfile(file,ts,te,tint,opt,0,rcv,NULL,obs,nav,sta);
+       
+    return stat;
+}
 extern int readrnx(const char *file, int rcv, const char *opt, obs_t *obs,
                    nav_t *nav, sta_t *sta)
 {
@@ -1811,6 +2081,15 @@ extern int readrnx(const char *file, int rcv, const char *opt, obs_t *obs,
     rtktrace(3,"readrnx : file=%s rcv=%d\n",file,rcv);
     
     return readrnxt(file,rcv,t,t,0.0,opt,obs,nav,sta);
+}
+extern int writernx(const char *file, int rcv, const char *opt, obs_t *obs,
+                   nav_t *nav, sta_t *sta)
+{
+    gtime_t t={0};
+    
+    rtktrace(3,"writernx : file=%s rcv=%d\n",file,rcv);
+    
+    return writernxt(file,rcv,t,t,0.0,opt,obs,nav,sta);
 }
 /* compare precise clock -----------------------------------------------------*/
 static int cmppclk(const void *p1, const void *p2)
