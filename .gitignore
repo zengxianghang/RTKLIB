@@ -9,3 +9,4 @@ __history
 *.DS_Store
 rtklib.xcodeproj
 *.json
+data
