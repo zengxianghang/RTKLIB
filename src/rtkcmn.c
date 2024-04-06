@@ -463,6 +463,7 @@ extern int str2sys(const char *id)
         case 'C': sys=SYS_CMP; break;
         case 'L': sys=SYS_LEO; break;
         case 'S': sys=SYS_SBS; break;
+        case 'I': sys=SYS_IRN; break;
         default: return 0;
     }
     return sys;
@@ -476,8 +477,6 @@ extern int str2sys(const char *id)
 *-----------------------------------------------------------------------------*/
 extern int sysstr(int sys, char *id)
 {
-    char code = id[0];
-    
     switch (sys) {
         case SYS_GPS: strcpy(id, "GPS"); break;
         case SYS_GLO: strcpy(id, "GLO"); break;
@@ -486,6 +485,7 @@ extern int sysstr(int sys, char *id)
         case SYS_CMP: strcpy(id, "BDS"); break;
         case SYS_LEO: strcpy(id, "LEO"); break;
         case SYS_SBS: strcpy(id, "SBS"); break;
+        case SYS_IRN: strcpy(id, "IRN"); break;
         default: return 0;
     }
     return sys;
