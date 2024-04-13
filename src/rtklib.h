@@ -159,7 +159,7 @@ extern "C" {
 
 #ifdef ENAGLO
 #define MINPRNGLO   1                   /* min satellite slot number of GLONASS */
-#define MAXPRNGLO   24                  /* max satellite slot number of GLONASS */
+#define MAXPRNGLO   26                  /* max satellite slot number of GLONASS */
 #define NSATGLO     (MAXPRNGLO-MINPRNGLO+1) /* number of GLONASS satellites */
 #define NSYSGLO     1
 #else
@@ -631,6 +631,8 @@ typedef struct {        /* GLONASS broadcast ephemeris type */
     int iode;           /* IODE (0-6 bit of tb field) */
     int frq;            /* satellite frequency number */
     int svh,sva,age;    /* satellite health, accuracy, age of operation */
+    int flag;           //status flags 9-bit binary number
+    int svhflag;        //health falgs 3-bit binary number
     gtime_t toe;        /* epoch of epherides (gpst) */
     gtime_t tof;        /* message frame time (gpst) */
     double pos[3];      /* satellite position (ecef) (m) */

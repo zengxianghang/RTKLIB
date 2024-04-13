@@ -1428,6 +1428,12 @@ static int decode_geph(double ver, int sat, gtime_t toc, double *data,
     geph->frq=(int)data[10];
     geph->age=(int)data[14];
     
+    //rinex4
+    geph->flag=(int)data[15];
+    geph->dtaun=data[16];
+    geph->sva=(int)data[17];
+    geph->svhflag=(int)data[18];
+    
     /* some receiver output >128 for minus frequency number */
     if (geph->frq>128) geph->frq-=256;
     
@@ -1843,7 +1849,7 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
                 data[i++]=str2num(p,0,19);
             }
             /* decode ephemeris */
-            if (sys==SYS_GLO&&i>=15) {
+            if (sys==SYS_GLO&&i>=19) {
                 if (!(mask&sys)) return 0;
                 *type=1;
                 return decode_geph(ver,sat,toc,data,geph);
@@ -2155,6 +2161,34 @@ static int writebdseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 }
 
+static void writegloeph(FILE *fp, geph_t *eph) {
+    
+    char sys_str[4] = "";
+    char time_str[100] = "";
+    
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    
+    if(!fp) return ;
+    
+    sysstr2(eph->hdr.sys, sys_str);
+    
+    double tof = time2gpst(gpst2utc(eph->tof), NULL);
+    
+    time2str2(gpst2utc(eph->toe), time_str, 0);
+    fprintf(fp, "%s%02d %s%19.12e%19.12e%19.12e\n",
+            sys_str, eph->hdr.prn, time_str, -eph->taun, eph->gamn, tof);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->pos[0]/1e3, eph->vel[0]/1e3, eph->acc[0]/1e3, (double)eph->svh);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->pos[1]/1e3, eph->vel[1]/1e3, eph->acc[1]/1e3, (double)eph->frq);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->pos[2]/1e3, eph->vel[2]/1e3, eph->acc[2]/1e3, (double)eph->age);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            (double)eph->flag, eph->dtaun, (double)eph->sva, (double)eph->svhflag);
+   //TODO: bugs in flag,svhflag output, how to distinguish between blank and 0.0
+
+}
+
 static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     gtime_t toc;
     double data[64];
@@ -2172,6 +2206,16 @@ static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
         writegaleph(fp, eph, NULL, NULL);
     else if(eph->hdr.sys == SYS_CMP)
         writebdseph(fp, eph, NULL, NULL);
+    
+    return -1;
+
+}
+
+static int writernx4gephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    
+    writernxnavhdr(fp, &geph->hdr);
+    writegloeph(fp, geph);
     
     return -1;
 
@@ -2257,6 +2301,10 @@ static void writernxnavb(FILE *fp, nav_t *nav)
     for(i=0;i<nav->n;i++)
     { 
         writernx4ephbody(fp, &nav->eph[i], NULL, NULL);
+    }
+    for(i=0;i<nav->ng;i++)
+    {
+        writernx4gephbody(fp, NULL, &nav->geph[i], NULL);
     }
     
 }
