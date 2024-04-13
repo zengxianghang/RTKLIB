@@ -51,6 +51,8 @@ extern "C" {
 #define ENAQZS
 #define ENAIRN
 
+#define URA2URAI 0
+
 /* constants -----------------------------------------------------------------*/
 
 #define VER_RTKLIB  "2.4.2"             /* library version */
@@ -519,6 +521,15 @@ typedef struct {        /* time struct */
     double sec;         /* fraction of second under 1 s */
 } gtime_t;
 
+
+typedef struct {
+    int data_type;
+    int sys;
+    int prn;
+    int msg_type;
+} nav_data_hdr_t;
+
+
 typedef struct {        /* observation data record */
     gtime_t time;       /* receiver sampling time (GPST) */
     unsigned char sat,rcv; /* satellite/receiver number */
@@ -578,7 +589,11 @@ typedef struct {        /* almanac type */
 typedef struct {        /* GPS/QZS/GAL broadcast ephemeris type */
     int sat;            /* satellite number */
     int iode,iodc;      /* IODE,IODC */
+#if URA2URAI
     int sva;            /* SV accuracy (URA index) */
+#else
+    double sva;            /* SV accuracy (m) */
+#endif
     int svh;            /* SV health (0:ok) */
     int week;           /* GPS/QZS: gps week, GAL: galileo week */
     int code;           /* GPS/QZS: code on L2, GAL/CMP: data sources */
@@ -595,6 +610,17 @@ typedef struct {        /* GPS/QZS/GAL broadcast ephemeris type */
                         /* GAL    :tgd[0]=BGD E5a/E1,tgd[1]=BGD E5b/E1 */
                         /* CMP    :tgd[0]=BGD1,tgd[1]=BGD2 */
     double Adot,ndot;   /* Adot,ndot for CNAV */
+    nav_data_hdr_t hdr;
+    //new data for GPS CNAV1 and CNAV2
+    double a_dot;
+    double delta_n0;
+    double top;
+    double delta_n0_dot;
+    double urai_ned[3];
+    double urai_ed;
+    double isc[6]; //0: L1CA, 1: L2C, 2: L5I5, 3:L5Q5, 4: L1Cd, 5: L1Cp
+    double wn_op;
+    
 } eph_t;
 
 typedef struct {        /* GLONASS broadcast ephemeris type */
@@ -609,6 +635,7 @@ typedef struct {        /* GLONASS broadcast ephemeris type */
     double acc[3];      /* satellite acceleration (ecef) (m/s^2) */
     double taun,gamn;   /* SV clock bias (s)/relative freq bias */
     double dtaun;       /* delay between L1 and L2 (s) */
+    nav_data_hdr_t hdr;
 } geph_t;
 
 typedef struct {        /* precise ephemeris type */
@@ -639,6 +666,7 @@ typedef struct {        /* SBAS ephemeris type */
     double vel[3];      /* satellite velocity (m/s) (ecef) */
     double acc[3];      /* satellite acceleration (m/s^2) (ecef) */
     double af0,af1;     /* satellite clock-offset/drift (s,s/s) */
+    nav_data_hdr_t hdr;
 } seph_t;
 
 typedef struct {        /* norad two line element data type */
@@ -822,12 +850,6 @@ typedef struct {        /* QZSS LEX ephemeris type */
     double isc[8];      /* ISC */
 } lexeph_t;
 
-typedef struct {
-    int data_type;
-    int sys;
-    int prn;
-    int msg_type;
-} nav_data_hdr_t;
 
 typedef struct { //see rinex4.01, table A32
     nav_data_hdr_t hdr;

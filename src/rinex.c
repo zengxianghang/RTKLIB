@@ -1213,6 +1213,132 @@ static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
     }
     return 1;
 }
+/* decode ephemeris ----------------------------------------------------------*/
+static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
+                      eph_t *eph, nav_data_hdr_t *hdr)
+{
+    eph_t eph0={0};
+    int sys;
+    int week;
+    time2gpst(toc, &week);
+    
+    rtktrace(4,"decode_eph: ver=%.2f sat=%2d\n",ver,sat);
+    
+    sys=satsys(sat,NULL);
+    
+    if (!(sys&(SYS_GPS|SYS_GAL|SYS_QZS|SYS_CMP))) {
+        rtktrace(2,"ephemeris error: invalid satellite sat=%2d\n",sat);
+        return 0;
+    }
+    *eph=eph0;
+    
+    eph->sat=sat;
+    eph->toc=toc;
+    
+    eph->f0=data[0];
+    eph->f1=data[1];
+    eph->f2=data[2];
+    
+    eph->A=SQR(data[10]); eph->e=data[ 8]; eph->i0  =data[15]; eph->OMG0=data[13];
+    eph->omg =data[17]; eph->M0 =data[ 6]; eph->deln=data[ 5]; eph->OMGd=data[18];
+    eph->idot=data[19]; eph->crc=data[16]; eph->crs =data[ 4]; eph->cuc =data[ 7];
+    eph->cus =data[ 9]; eph->cic=data[12]; eph->cis =data[14];
+    
+    if (sys==SYS_GPS||sys==SYS_QZS) {
+        eph->iode=(int)data[ 3];      /* IODE */
+        eph->iodc=(int)data[26];      /* IODC */
+        eph->toes=     data[11];      /* toe (s) in gps week */
+        eph->week=(int)data[21];      /* gps week */
+        eph->toe=adjweek(gpst2time(eph->week,data[11]),toc);
+        eph->ttr=adjweek(gpst2time(eph->week,data[27]),toc);
+        
+        eph->code=(int)data[20];      /* GPS: codes on L2 ch */
+        eph->svh =(int)data[24];      /* sv health */
+#if URA2URAI
+        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+#else
+        eph->sva=(data[23]);  /* do NOT convert ura (m->index) */
+#endif
+        eph->flag=(int)data[22];      /* GPS: L2 P data flag */
+        
+        eph->tgd[0]=   data[25];      /* TGD */
+        eph->fit   =   data[28];      /* fit interval */
+    }
+    else if (sys==SYS_GAL) { /* GAL ver.3 */
+        eph->iode=(int)data[ 3];      /* IODnav */
+        eph->toes=     data[11];      /* toe (s) in galileo week */
+        eph->week=(int)data[21];      /* gal week = gps week */
+        eph->toe=adjweek(gpst2time(eph->week,data[11]),toc);
+        eph->ttr=adjweek(gpst2time(eph->week,data[27]),toc);
+        
+        eph->code=(int)data[20];      /* data sources */
+                                      /* bit 0 set: I/NAV E1-B */
+                                      /* bit 1 set: F/NAV E5a-I */
+                                      /* bit 2 set: F/NAV E5b-I */
+                                      /* bit 8 set: af0-af2 toc are for E5a.E1 */
+                                      /* bit 9 set: af0-af2 toc are for E5b.E1 */
+        eph->svh =(int)data[24];      /* sv health */
+                                      /* bit     0: E1B DVS */
+                                      /* bit   1-2: E1B HS */
+                                      /* bit     3: E5a DVS */
+                                      /* bit   4-5: E5a HS */
+                                      /* bit     6: E5b DVS */
+                                      /* bit   7-8: E5b HS */
+#if URA2URAI
+        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+#else
+        eph->sva=(data[23]);  /* do NOT convert ura (m->index) */
+#endif
+        eph->tgd[0]=   data[25];      /* BGD E5a/E1 */
+        eph->tgd[1]=   data[26];      /* BGD E5b/E1 */
+    }
+    else if (sys==SYS_CMP) { /* BeiDou v.3.02 */
+        eph->toc=bdt2gpst(eph->toc);  /* bdt -> gpst */
+        eph->iode=(int)data[ 3];      /* AODE */
+        eph->iodc=(int)data[28];      /* AODC */
+        eph->toes=     data[11];      /* toe (s) in bdt week */
+        eph->week=(int)data[21];      /* bdt week */
+        eph->toe=bdt2gpst(bdt2time(eph->week,data[11])); /* bdt -> gpst */
+        eph->ttr=bdt2gpst(bdt2time(eph->week,data[27])); /* bdt -> gpst */
+        eph->toe=adjweek(eph->toe,toc);
+        eph->ttr=adjweek(eph->ttr,toc);
+        
+        eph->svh =(int)data[24];      /* satH1 */
+#if URA2URAI
+        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+#else
+        eph->sva=(data[23]);  /* do NOT convert ura (m->index) */
+#endif
+        eph->tgd[0]=   data[25];      /* TGD1 B1/B3 */
+        eph->tgd[1]=   data[26];      /* TGD2 B2/B3 */
+    }
+    if (eph->iode<0||1023<eph->iode) {
+        rtktrace(2,"rinex nav invalid: sat=%2d iode=%d\n",sat,eph->iode);
+    }
+    if (eph->iodc<0||1023<eph->iodc) {
+        rtktrace(2,"rinex nav invalid: sat=%2d iodc=%d\n",sat,eph->iodc);
+    }
+    
+    //decode GPS CNAV1 and CNAV2
+    if(hdr->sys == SYS_GPS && (hdr->msg_type == NAV_CNAV || hdr->msg_type == NAV_CNV2)) {
+        eph->toe = toc;
+        eph->a_dot = data[3];
+        eph->delta_n0 = data[5];
+        eph->top = data[11];
+        eph->delta_n0_dot = data[20];
+        eph->urai_ned[0] = data[21];
+        eph->urai_ned[1] = data[22];
+        eph->urai_ned[2] = data[26];
+        eph->urai_ed = data[23];
+        memcpy(eph->isc, &data[27], sizeof(eph->isc));
+        
+        eph->ttr = adjweek(gpst2time(week,data[31]),toc);
+        eph->wn_op = data[32];
+    }
+    
+    
+    return 1;
+}
 /* decode glonass ephemeris --------------------------------------------------*/
 static int decode_geph(double ver, int sat, gtime_t toc, double *data,
                        geph_t *geph)
@@ -1393,6 +1519,21 @@ static void decode_record_hdr(char *buff, nav_data_hdr_t *hdr) {
 }
 
 
+static void writernxnavhdr(FILE *fp, nav_data_hdr_t *hdr)
+{
+    char msg_str[5] = "";
+    char data_str[5] = "";
+    char sys_str[5] = "";
+    
+    if(!fp) return ;
+    
+    navmsgstr(hdr->msg_type, msg_str);
+    navdatastr(hdr->data_type, data_str);
+    sysstr2(hdr->sys, sys_str);
+    
+    fprintf(fp, "> %s %s%02d %s\n", data_str, sys_str,hdr->prn, msg_str);
+}
+
 /*
  return :
  0: normal exit
@@ -1401,7 +1542,6 @@ static void decode_record_hdr(char *buff, nav_data_hdr_t *hdr) {
  3:
  */
 static int readionbody(FILE *fp, char *buff, ion_t *ion) {
-    char id[8] = "";
     int line_num = 1;
     int j = 0;
     int sp = 4;
@@ -1409,15 +1549,9 @@ static int readionbody(FILE *fp, char *buff, ion_t *ion) {
     int data_idx = 0;
     int max_line_cnt = ION_LINE_CNT;
     
-    memset(ion, 0, sizeof(ion_t));
-    ion->hdr.data_type = NAV_ION;
-    //decode ion line 1
-    strncpy(id, &buff[7], 2);
-    ion->hdr.sys = str2sys(&buff[6]);
+//    memset(ion, 0, sizeof(ion_t));
     if(ion->hdr.sys == SYS_GAL)
         max_line_cnt = 3;
-    ion->hdr.prn = (int)str2num(&buff[7], 0, 2);
-    ion->hdr.msg_type = read_nav_msg_type(&buff[10]);
     line_num += 1;
     
     while(fgets(buff,MAXRNXLEN,fp)) {
@@ -1605,6 +1739,237 @@ static int readephbody(FILE *fp, const char *opt, double ver, int sys,
 
 }
 
+static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
+                        int *type, nav_data_hdr_t *hdr,
+                        eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+   
+    int max_data_cnt = 31;
+    if(hdr->sys == SYS_GPS && hdr->msg_type == NAV_CNAV) max_data_cnt = 35;
+    else if(hdr->sys == SYS_GPS && hdr->msg_type == NAV_CNV2) max_data_cnt = 39;
+    
+    
+    rtktrace(4,"readrnxnavb: ver=%.2f sys=%d\n",ver,sys);
+    
+    /* set system mask */
+    mask=set_sysmask(opt);
+    
+    while (fgets(buff,MAXRNXLEN,fp)) {
+        
+        if (i==0) {
+            
+            /* decode satellite field */
+            if (ver>=3.0||sys==SYS_GAL||sys==SYS_QZS) { /* ver.3 or GAL/QZS */
+                strncpy(id,buff,3);
+                sat=satid2no(id);
+                sp=4;
+                if (ver>=3.0) sys=satsys(sat,NULL);
+            }
+            else {
+                prn=(int)str2num(buff,0,2);
+                
+                if (sys==SYS_SBS) {
+                    sat=satno(SYS_SBS,prn+100);
+                }
+                else if (sys==SYS_GLO) {
+                    sat=satno(SYS_GLO,prn);
+                }
+                else if (93<=prn&&prn<=97) { /* extension */
+                    sat=satno(SYS_QZS,prn+100);
+                }
+                else sat=satno(SYS_GPS,prn);
+            }
+            /* decode toc field */
+            if (str2time(buff+sp,0,19,&toc)) {
+                rtktrace(2,"rinex nav toc error: %23.23s\n",buff);
+                return 0;
+            }
+            /* decode data fields */
+            for (j=0,p=buff+sp+19;j<3;j++,p+=19) {
+                data[i++]=str2num(p,0,19);
+            }
+        }
+        else {
+            /* decode data fields */
+            for (j=0,p=buff+sp;j<4;j++,p+=19) {
+                data[i++]=str2num(p,0,19);
+            }
+            /* decode ephemeris */
+            if (sys==SYS_GLO&&i>=15) {
+                if (!(mask&sys)) return 0;
+                *type=1;
+                return decode_geph(ver,sat,toc,data,geph);
+            }
+            else if (sys==SYS_SBS&&i>=15) {
+                if (!(mask&sys)) return 0;
+                *type=2;
+                return decode_seph(ver,sat,toc,data,seph);
+            }
+            else if (i>=max_data_cnt) {
+                if (!(mask&sys)) return 0;
+                *type=0;
+                return decode_rnx4_eph(ver,sat,toc,data,eph, hdr);
+            }
+        }
+    }
+
+    return -1;
+
+}
+
+static void writegpscnv2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+    char sys_str[4] = "";
+   
+    char time_str[100] = "";
+    int sys = eph->hdr.sys;
+    
+    if(!fp) return ;
+    double ttrs;
+    ttrs = time2gpst(eph->ttr, NULL); //second of ttr
+    
+    sysstr2(eph->hdr.sys, sys_str);
+    
+    time2str2(eph->toc, time_str, 0);
+    fprintf(fp, "%s%02d %s%19.12e%19.12e%19.12e\n",
+            sys_str, eph->hdr.prn, time_str, eph->f0, eph->f1, eph->f2);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->a_dot, eph->crs, eph->delta_n0, eph->M0);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->cuc, eph->e, eph->cus, sqrt(fmax(0, eph->A)));
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->top, eph->cic, eph->OMG0, eph->cis);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->i0, eph->crc, eph->omg, eph->OMGd);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->idot, eph->delta_n0_dot, eph->urai_ned[0], eph->urai_ned[1]);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->urai_ed, eph->svh, eph->tgd[0], eph->urai_ned[2]);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->isc[0], eph->isc[1], eph->isc[2], eph->isc[3]);
+    fprintf(fp, "    %19.12e%19.12e",
+            eph->isc[4], eph->isc[5]);
+    fprintf(fp, "%*s\n", 38, "");
+    fprintf(fp, "    %19.12e%19.12e", ttrs, eph->wn_op);
+    fprintf(fp, "%*s\n", 38, "");
+}
+
+static void writegpscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+    char sys_str[4] = "";
+   
+    char time_str[100] = "";
+    int sys = eph->hdr.sys;
+    
+    if(!fp) return ;
+    double ttrs;
+    ttrs = time2gpst(eph->ttr, NULL); //second of ttr
+    
+    sysstr2(eph->hdr.sys, sys_str);
+    
+    time2str2(eph->toc, time_str, 0);
+    fprintf(fp, "%s%02d %s%19.12e%19.12e%19.12e\n",
+            sys_str, eph->hdr.prn, time_str, eph->f0, eph->f1, eph->f2);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->a_dot, eph->crs, eph->delta_n0, eph->M0);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->cuc, eph->e, eph->cus, sqrt(fmax(0, eph->A)));
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->top, eph->cic, eph->OMG0, eph->cis);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->i0, eph->crc, eph->omg, eph->OMGd);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->idot, eph->delta_n0_dot, eph->urai_ned[0], eph->urai_ned[1]);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->urai_ed, (double)eph->svh, eph->tgd[0], eph->urai_ned[2]);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->isc[0], eph->isc[1], eph->isc[2], eph->isc[3]);
+    fprintf(fp, "    %19.12e%19.12e", ttrs, eph->wn_op);
+    fprintf(fp, "%*s\n", 38, "");
+
+}
+
+static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+    char sys_str[4] = "";
+    char time_str[100] = "";
+    int sys = eph->hdr.sys;
+    
+    
+    if(!fp) return ;
+    double ttrs;
+    ttrs = time2gpst(eph->ttr, NULL); //second of ttr
+    
+    sysstr2(eph->hdr.sys, sys_str);
+    
+    time2str2(eph->toc, time_str, 0);
+    fprintf(fp, "%s%02d %s%19.12e%19.12e%19.12e\n",
+            sys_str, eph->hdr.prn, time_str, eph->f0, eph->f1, eph->f2);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            (double)eph->iode, eph->crs, eph->deln, eph->M0);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->cuc, eph->e, eph->cus, sqrt(fmax(0, eph->A)));
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->toes, eph->cic, eph->OMG0, eph->cis);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->i0, eph->crc, eph->omg, eph->OMGd);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            (double)eph->idot, (double)eph->code, (double)eph->week, (double)eph->flag);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            (double)(eph->sva), (double)eph->svh, eph->tgd[0], (double)eph->iodc);
+    if (eph->fit == 0.0)
+        fprintf(fp, "    %19.12e%*s", ttrs, 19, "");
+    else
+        fprintf(fp, "    %19.12e%19.12e", ttrs, eph->fit);
+    fprintf(fp, "%*s\n", 38, "");
+
+}
+
+static int writegpseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+   
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    
+    if(eph->hdr.msg_type == NAV_LNAV) writegpslnav(fp, eph, NULL, NULL);
+    else if(eph->hdr.msg_type == NAV_CNAV) writegpscnav(fp, eph, NULL, NULL);
+    else if(eph->hdr.msg_type == NAV_CNV2) writegpscnv2(fp, eph, NULL, NULL);
+    
+    return -1;
+
+}
+
+static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+   
+    
+    
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    
+    writernxnavhdr(fp, &eph->hdr);
+    if (eph->hdr.sys == SYS_GPS) writegpseph(fp, eph, NULL, NULL);
+    
+    return -1;
+
+}
+
 /* read rinex navigation data body -------------------------------------------*/
 static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                        int *type, eph_t *eph, geph_t *geph, seph_t *seph,
@@ -1612,6 +1977,8 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
 {
     int mask;
     char buff[MAXRNXLEN];
+    
+    memset(ion, 0, sizeof(ion_t));
    
     rtktrace(4,"readrnxnavb: ver=%.2f sys=%d\n",ver,sys);
     
@@ -1620,6 +1987,9 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
     if (ver >= 4.0) {
         while (fgets(buff,MAXRNXLEN,fp)) {
             if(buff[0] == '>') { //bugs in here
+                nav_data_hdr_t tmp_hdr = { 0 };
+                decode_record_hdr(buff, &tmp_hdr);
+                
                 int data_type = read_nav_data_type(&buff[2]);
                 if (data_type == NAV_STO) {
                     *type = 5;
@@ -1627,6 +1997,7 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                 }
                 else if(data_type == NAV_ION) {
                     *type = 4;
+                    ion->hdr = tmp_hdr;
                     return (!readionbody(fp, buff, ion));
                 }
                 else if (data_type == NAV_EOP) {
@@ -1634,7 +2005,17 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                     return 0;
                 }
                 else if (data_type == NAV_EPH) {
-                    return readephbody(fp, opt, ver, sys, type, eph, geph, seph);
+                    
+                    int sta = readrnx4ephbody(fp, opt, ver, sys, type, &tmp_hdr, eph, geph, seph);
+                    if(tmp_hdr.sys == SYS_GLO)
+                        geph->hdr = tmp_hdr;
+                    else if(tmp_hdr.sys == SYS_GPS || tmp_hdr.sys == SYS_GAL 
+                            || tmp_hdr.sys == SYS_CMP)
+                        eph->hdr = tmp_hdr;
+                    else if(tmp_hdr.sys == SYS_SBS) 
+                        seph->hdr = tmp_hdr;
+                    
+                    return sta;
                 }
             }
         }
@@ -1644,20 +2025,8 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
     }
     return -1;
 }
-static void writernxnavhdr(FILE *fp, nav_data_hdr_t *hdr)
-{
-    char msg_str[5] = "";
-    char data_str[5] = "";
-    char sys_str[5] = "";
-    
-    if(!fp) return ;
-    
-    navmsgstr(hdr->msg_type, msg_str);
-    navdatastr(hdr->data_type, data_str);
-    sysstr2(hdr->sys, sys_str);
-    
-    fprintf(fp, "> %s %s%02d %s\n", data_str, sys_str,hdr->prn, msg_str);
-}
+
+
 static void writernxion(FILE *fp, ion_t *ion)
 {
     if(!fp) return;
@@ -1679,7 +2048,9 @@ static void writernxnavb(FILE *fp, nav_t *nav)
         writernxion(fp, &nav->ion[i]);
     
     for(i=0;i<nav->n;i++)
-    { }
+    { 
+        writernx4ephbody(fp, &nav->eph[i], NULL, NULL);
+    }
     
 }
 /* add ephemeris to navigation data ------------------------------------------*/
