@@ -1229,7 +1229,7 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
     
     sys=satsys(sat,NULL);
     
-    if (!(sys&(SYS_GPS|SYS_GAL|SYS_QZS|SYS_CMP))) {
+    if (!(sys&(SYS_GPS|SYS_GAL|SYS_QZS|SYS_CMP|SYS_IRN))) {
         rtktrace(2,"ephemeris error: invalid satellite sat=%2d\n",sat);
         return 0;
     }
@@ -1247,7 +1247,7 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
     eph->idot=data[19]; eph->crc=data[16]; eph->crs =data[ 4]; eph->cuc =data[ 7];
     eph->cus =data[ 9]; eph->cic=data[12]; eph->cis =data[14];
     
-    if (sys==SYS_GPS||sys==SYS_QZS) {
+    if (sys==SYS_GPS||sys==SYS_QZS||sys==SYS_IRN) {
         eph->iode=(int)data[ 3];      /* IODE */
         eph->iodc=(int)data[26];      /* IODC */
         eph->toes=     data[11];      /* toe (s) in gps week */
@@ -1976,11 +1976,22 @@ static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
             eph->toes, eph->cic, eph->OMG0, eph->cis);
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
             eph->i0, eph->crc, eph->omg, eph->OMGd);
-    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
-            (double)eph->idot, (double)eph->code, (double)eph->week, (double)eph->flag);
-    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
-            (double)(eph->sva), (double)eph->svh, eph->tgd[0], (double)eph->iodc);
-    if (eph->fit == 0.0 && eph->hdr.sys == SYS_GPS)
+    if (eph->hdr.sys == SYS_IRN) {
+        fprintf(fp, "    %19.12e%*s%19.12e%*s\n",
+                (double)eph->idot, 19, "", (double)eph->week, 19, "");
+    } else {
+        fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+                (double)eph->idot, (double)eph->code, (double)eph->week, (double)eph->flag);
+    }
+    if (eph->hdr.sys == SYS_IRN) {
+        fprintf(fp, "    %19.12e%19.12e%19.12e\n",
+                (double)(eph->sva), (double)eph->svh, eph->tgd[0]);
+    } else {
+        fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+                (double)(eph->sva), (double)eph->svh, eph->tgd[0], (double)eph->iodc);
+    }
+    if ((eph->fit == 0.0 && eph->hdr.sys == SYS_GPS)
+        || eph->hdr.sys == SYS_IRN)
         fprintf(fp, "    %19.12e%*s", ttrs, 19, "");
     else
         fprintf(fp, "    %19.12e%19.12e", ttrs, eph->fit);
@@ -2200,7 +2211,7 @@ static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
     writernxnavhdr(fp, &eph->hdr);
-    if (eph->hdr.sys == SYS_GPS || eph->hdr.sys == SYS_QZS)
+    if (eph->hdr.sys == SYS_GPS || eph->hdr.sys == SYS_QZS || eph->hdr.sys == SYS_IRN)
         writegpseph(fp, eph, NULL, NULL);
     else if(eph->hdr.sys == SYS_GAL) 
         writegaleph(fp, eph, NULL, NULL);
@@ -2261,7 +2272,7 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                     if(tmp_hdr.sys == SYS_GLO)
                         geph->hdr = tmp_hdr;
                     else if(tmp_hdr.sys == SYS_GPS || tmp_hdr.sys == SYS_GAL 
-                            || tmp_hdr.sys == SYS_CMP || tmp_hdr.sys == SYS_QZS)
+                            || tmp_hdr.sys == SYS_CMP || tmp_hdr.sys == SYS_QZS || tmp_hdr.sys == SYS_IRN)
                         eph->hdr = tmp_hdr;
                     else if(tmp_hdr.sys == SYS_SBS) 
                         seph->hdr = tmp_hdr;
