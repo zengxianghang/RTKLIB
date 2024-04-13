@@ -1471,7 +1471,13 @@ static int decode_seph(double ver, int sat, gtime_t toc, double *data,
     seph->acc[0]=data[5]*1E3; seph->acc[1]=data[9]*1E3; seph->acc[2]=data[13]*1E3;
     
     seph->svh=(int)data[6];
+#if URA2URAI
     seph->sva=uraindex(data[10]);
+#else
+    seph->sva=(data[10]);
+#endif
+    
+    seph->iodn = data[14];
     
     return 1;
 }
@@ -2200,6 +2206,33 @@ static void writegloeph(FILE *fp, geph_t *eph) {
 
 }
 
+static void writesbseph(FILE *fp, seph_t *eph) {
+    
+    char sys_str[4] = "";
+    char time_str[100] = "";
+    
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    
+    if(!fp) return ;
+    double ttrs;
+    ttrs = time2gpst(eph->tof, NULL); //second of ttr
+    
+    sysstr2(eph->hdr.sys, sys_str);
+    
+    time2str2(eph->t0, time_str, 0);
+    
+    fprintf(fp, "%s%02d %s%19.12e%19.12e%19.12e\n",
+            sys_str, eph->hdr.prn, time_str, eph->af0, eph->af1, ttrs);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->pos[0]/1e3, eph->vel[0]/1e3, eph->acc[0]/1e3, (double)eph->svh);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->pos[1]/1e3, eph->vel[1]/1e3, eph->acc[1]/1e3, (double)eph->sva);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->pos[2]/1e3, eph->vel[2]/1e3, eph->acc[2]/1e3, (double)eph->iodn);
+    
+}
+
+
 static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     gtime_t toc;
     double data[64];
@@ -2227,6 +2260,16 @@ static int writernx4gephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     
     writernxnavhdr(fp, &geph->hdr);
     writegloeph(fp, geph);
+    
+    return -1;
+
+}
+
+static int writernx4sephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    
+    writernxnavhdr(fp, &seph->hdr);
+    writesbseph(fp, seph);
     
     return -1;
 
@@ -2316,6 +2359,10 @@ static void writernxnavb(FILE *fp, nav_t *nav)
     for(i=0;i<nav->ng;i++)
     {
         writernx4gephbody(fp, NULL, &nav->geph[i], NULL);
+    }
+    for(i=0;i<nav->ns;i++)
+    {
+        writernx4sephbody(fp, NULL, NULL, &nav->seph[i]);
     }
     
 }

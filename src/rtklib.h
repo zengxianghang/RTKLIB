@@ -230,7 +230,7 @@ extern "C" {
 #define NSYS        (NSYSGPS+NSYSGLO+NSYSGAL+NSYSQZS+NSYSCMP+NSYSLEO+NSYSIRN) /* number of systems */
 
 #define MINPRNSBS   120                 /* min satellite PRN number of SBAS */
-#define MAXPRNSBS   142                 /* max satellite PRN number of SBAS */
+#define MAXPRNSBS   158                 /* max satellite PRN number of SBAS */
 #define NSATSBS     (MAXPRNSBS-MINPRNSBS+1) /* number of SBAS satellites */
 
 #define MAXSAT      (NSATGPS+NSATGLO+NSATGAL+NSATQZS+NSATCMP+NSATSBS+NSATLEO+NSATIRN)
@@ -671,6 +671,7 @@ typedef struct {        /* SBAS ephemeris type */
     double vel[3];      /* satellite velocity (m/s) (ecef) */
     double acc[3];      /* satellite acceleration (m/s^2) (ecef) */
     double af0,af1;     /* satellite clock-offset/drift (s,s/s) */
+    double iodn;
     nav_data_hdr_t hdr;
 } seph_t;
 
