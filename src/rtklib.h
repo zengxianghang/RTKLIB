@@ -170,7 +170,7 @@ extern "C" {
 #endif
 #ifdef ENAGAL
 #define MINPRNGAL   1                   /* min satellite PRN number of Galileo */
-#define MAXPRNGAL   30                  /* max satellite PRN number of Galileo */
+#define MAXPRNGAL   36                  /* max satellite PRN number of Galileo */
 #define NSATGAL    (MAXPRNGAL-MINPRNGAL+1) /* number of Galileo satellites */
 #define NSYSGAL     1
 #else
@@ -612,14 +612,17 @@ typedef struct {        /* GPS/QZS/GAL broadcast ephemeris type */
     double Adot,ndot;   /* Adot,ndot for CNAV */
     nav_data_hdr_t hdr;
     //new data for GPS CNAV1 and CNAV2
-    double a_dot;
     double delta_n0;
     double top;
     double delta_n0_dot;
     double urai_ned[3];
     double urai_ed;
-    double isc[6]; //0: L1CA, 1: L2C, 2: L5I5, 3:L5Q5, 4: L1Cd, 5: L1Cp
+    double isc[6]; //GPS: 0: L1CA, 1: L2C, 2: L5I5, 3:L5Q5, 4: L1Cd, 5: L1Cp
     double wn_op;
+    
+    //new data for BDS CNAV1
+    double sisai[4];
+    double int_flag;
     
 } eph_t;
 
