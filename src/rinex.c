@@ -1323,7 +1323,8 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
     }
     
     //decode GPS CNAV1 and CNAV2
-    if(hdr->sys == SYS_GPS && (hdr->msg_type == NAV_CNAV || hdr->msg_type == NAV_CNV2)) {
+    if((hdr->sys == SYS_GPS || hdr->sys == SYS_QZS)
+       && (hdr->msg_type == NAV_CNAV || hdr->msg_type == NAV_CNV2)) {
         eph->toe = toc;
         eph->Adot = data[3];
         eph->delta_n0 = data[5];
@@ -1333,10 +1334,16 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         eph->urai_ned[1] = data[22];
         eph->urai_ned[2] = data[26];
         eph->urai_ed = data[23];
-        memcpy(eph->isc, &data[27], sizeof(eph->isc));
         
-        eph->ttr = adjweek(gpst2time(week,data[31]),toc);
-        eph->wn_op = data[32];
+        if (hdr->msg_type == NAV_CNAV) {
+            memcpy(eph->isc, &data[27], sizeof(double) * 4);
+            eph->ttr = adjweek(gpst2time(week,data[31]),toc);
+            eph->wn_op = data[32];
+        } else {
+            memcpy(eph->isc, &data[27], sizeof(double) * 6);
+            eph->ttr = adjweek(gpst2time(week,data[35]),toc);
+            eph->wn_op = data[36];
+        }
     }
     
     //decode BDS CNAV1
@@ -1967,7 +1974,7 @@ static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
             (double)eph->idot, (double)eph->code, (double)eph->week, (double)eph->flag);
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
             (double)(eph->sva), (double)eph->svh, eph->tgd[0], (double)eph->iodc);
-    if (eph->fit == 0.0)
+    if (eph->fit == 0.0 && eph->hdr.sys == SYS_GPS)
         fprintf(fp, "    %19.12e%*s", ttrs, 19, "");
     else
         fprintf(fp, "    %19.12e%19.12e", ttrs, eph->fit);
@@ -2210,7 +2217,7 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                     if(tmp_hdr.sys == SYS_GLO)
                         geph->hdr = tmp_hdr;
                     else if(tmp_hdr.sys == SYS_GPS || tmp_hdr.sys == SYS_GAL 
-                            || tmp_hdr.sys == SYS_CMP)
+                            || tmp_hdr.sys == SYS_CMP || tmp_hdr.sys == SYS_QZS)
                         eph->hdr = tmp_hdr;
                     else if(tmp_hdr.sys == SYS_SBS) 
                         seph->hdr = tmp_hdr;
