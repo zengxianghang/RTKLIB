@@ -1953,6 +1953,60 @@ static int writegpseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 }
 
+
+static void writegalinav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+    char sys_str[4] = "";
+    char time_str[100] = "";
+    int sys = eph->hdr.sys;
+    
+    
+    if(!fp) return ;
+    double ttrs;
+    ttrs = time2gpst(eph->ttr, NULL); //second of ttr
+    
+    sysstr2(eph->hdr.sys, sys_str);
+    
+    time2str2(eph->toc, time_str, 0);
+    fprintf(fp, "%s%02d %s%19.12e%19.12e%19.12e\n",
+            sys_str, eph->hdr.prn, time_str, eph->f0, eph->f1, eph->f2);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            (double)eph->iode, eph->crs, eph->deln, eph->M0);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->cuc, eph->e, eph->cus, sqrt(fmax(0, eph->A)));
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->toes, eph->cic, eph->OMG0, eph->cis);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            eph->i0, eph->crc, eph->omg, eph->OMGd);
+    fprintf(fp, "    %19.12e%19.12e%19.12e\n",
+            (double)eph->idot, (double)eph->code, (double)eph->week);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
+            (double)(eph->sva), (double)eph->svh, eph->tgd[0], eph->tgd[1]);
+    fprintf(fp, "    %19.12e\n", ttrs);
+   
+
+}
+
+
+
+static int writegaleph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+   
+    rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
+    
+    writegalinav(fp, eph, NULL, NULL);
+    
+    return -1;
+
+}
+
+
 static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     gtime_t toc;
     double data[64];
@@ -1965,6 +2019,8 @@ static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     
     writernxnavhdr(fp, &eph->hdr);
     if (eph->hdr.sys == SYS_GPS) writegpseph(fp, eph, NULL, NULL);
+    else if(eph->hdr.sys == SYS_GAL) writegaleph(fp, eph, NULL, NULL);
+    
     
     return -1;
 
