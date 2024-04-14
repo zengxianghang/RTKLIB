@@ -2036,8 +2036,8 @@ static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
                 (double)eph->idot, (double)eph->code, (double)eph->week, (double)eph->flag);
     }
     if (eph->hdr.sys == SYS_IRN) {
-        fprintf(fp, "    %19.12e%19.12e%19.12e\n",
-                (double)(eph->sva), (double)eph->svh, eph->tgd[0]);
+        fprintf(fp, "    %19.12e%19.12e%19.12e%*s\n",
+                (double)(eph->sva), (double)eph->svh, eph->tgd[0], 19, "");
     } else {
         fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
                 (double)(eph->sva), (double)eph->svh, eph->tgd[0], (double)eph->iodc);
@@ -2095,11 +2095,11 @@ static void writegalinav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
             eph->toes, eph->cic, eph->OMG0, eph->cis);
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
             eph->i0, eph->crc, eph->omg, eph->OMGd);
-    fprintf(fp, "    %19.12e%19.12e%19.12e\n",
-            (double)eph->idot, (double)eph->code, (double)eph->week);
+    fprintf(fp, "    %19.12e%19.12e%19.12e%*s\n",
+            (double)eph->idot, (double)eph->code, (double)eph->week, 19, "");
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
             (double)(eph->sva), (double)eph->svh, eph->tgd[0], eph->tgd[1]);
-    fprintf(fp, "    %19.12e\n", ttrs);
+    fprintf(fp, "    %19.12e%*s\n", ttrs, 19*3, "");
    
 
 }
@@ -2151,7 +2151,7 @@ static void writebdsd1d2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
             (double)eph->idot, 0.0, (double)eph->week, 0.0);
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
             (double)(eph->sva), (double)eph->svh, eph->tgd[0], eph->tgd[1]);
-    fprintf(fp, "    %19.12e%19.12e\n", ttrs, (double)eph->iodc);
+    fprintf(fp, "    %19.12e%19.12e%*s\n", ttrs, (double)eph->iodc, 19*2, "");
    
 
 }
@@ -2202,7 +2202,7 @@ static void writebdscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     } else if (eph->hdr.msg_type == NAV_CNV3) {
         fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
                 eph->sva, (double)eph->svh, eph->int_flag, (double)eph->tgd[0]);
-        fprintf(fp, "    %19.12e\n", ttrs);
+        fprintf(fp, "    %19.12e%*s\n", ttrs, 19*3, "");
     }
 
 }
@@ -2405,7 +2405,7 @@ static void writernxnavb(FILE *fp, nav_t *nav)
     {}
     for(i=0;i<nav->nion;i++)
         writernxion(fp, &nav->ion[i]);
-    
+#if 0
     for(i=0;i<nav->n;i++)
     { 
         writernx4ephbody(fp, &nav->eph[i], NULL, NULL);
@@ -2418,7 +2418,27 @@ static void writernxnavb(FILE *fp, nav_t *nav)
     {
         writernx4sephbody(fp, NULL, NULL, &nav->seph[i]);
     }
-    
+#else
+    //change output order
+    for(i=0;i<nav->n;i++)
+    {
+        if(nav->eph[i].hdr.sys == SYS_GPS)
+            writernx4ephbody(fp, &nav->eph[i], NULL, NULL);
+    }
+    for(i=0;i<nav->ns;i++)
+    {
+        writernx4sephbody(fp, NULL, NULL, &nav->seph[i]);
+    }
+    for(i=0;i<nav->ng;i++)
+    {
+        writernx4gephbody(fp, NULL, &nav->geph[i], NULL);
+    }
+    for(i=0;i<nav->n;i++)
+    {
+        if(nav->eph[i].hdr.sys != SYS_GPS)
+            writernx4ephbody(fp, &nav->eph[i], NULL, NULL);
+    }
+#endif
 }
 /* add ephemeris to navigation data ------------------------------------------*/
 static int add_eph(nav_t *nav, const eph_t *eph)

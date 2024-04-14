@@ -521,8 +521,8 @@ extern void navmsgstr(int type, char *str)
         case NAV_FDMA: strcpy(str, "FDMA"); break;
         case NAV_FNAV: strcpy(str, "FNAV"); break;
         case NAV_INAV: strcpy(str, "INAV"); break;
-        case NAV_D1: strcpy(str, "D1"); break;
-        case NAV_D2: strcpy(str, "D2"); break;
+        case NAV_D1: strcpy(str, "D1  "); break;
+        case NAV_D2: strcpy(str, "D2  "); break;
         case NAV_SBAS: strcpy(str, "SBAS"); break;
         case NAV_CNAV: strcpy(str, "CNAV"); break;
         case NAV_CNV1: strcpy(str, "CNV1"); break;
