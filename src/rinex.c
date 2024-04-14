@@ -1924,14 +1924,8 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
 }
 
 static void writegpscnv2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
     char sys_str[4] = "";
-   
     char time_str[100] = "";
-    int sys = eph->hdr.sys;
     
     if(!fp) return ;
     double ttrs;
@@ -1953,7 +1947,7 @@ static void writegpscnv2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
             eph->idot, eph->delta_n0_dot, eph->urai_ned[0], eph->urai_ned[1]);
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
-            eph->urai_ed, eph->svh, eph->tgd[0], eph->urai_ned[2]);
+            eph->urai_ed, (double)eph->svh, eph->tgd[0], eph->urai_ned[2]);
     fprintf(fp, "    %19.12e%19.12e%19.12e%19.12e\n",
             eph->isc[0], eph->isc[1], eph->isc[2], eph->isc[3]);
     fprintf(fp, "    %19.12e%19.12e",
@@ -1964,15 +1958,10 @@ static void writegpscnv2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 }
 
 static void writegpscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
-    char sys_str[4] = "";
    
+    char sys_str[4] = "";
     char time_str[100] = "";
-    int sys = eph->hdr.sys;
-    
+   
     if(!fp) return ;
     double ttrs;
     ttrs = time2gpst(eph->ttr, NULL); //second of ttr
@@ -2002,15 +1991,10 @@ static void writegpscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 }
 
 static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
+   
     char sys_str[4] = "";
     char time_str[100] = "";
-    int sys = eph->hdr.sys;
-    
-    
+   
     if(!fp) return ;
     double ttrs;
     ttrs = time2gpst(eph->ttr, NULL); //second of ttr
@@ -2052,10 +2036,6 @@ static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 }
 
 static int writegpseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
    
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
@@ -2069,15 +2049,10 @@ static int writegpseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 
 static void writegalinav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
+  
     char sys_str[4] = "";
     char time_str[100] = "";
-    int sys = eph->hdr.sys;
-    
-    
+   
     if(!fp) return ;
     double ttrs;
     ttrs = time2gpst(eph->ttr, NULL); //second of ttr
@@ -2107,11 +2082,7 @@ static void writegalinav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 
 static int writegaleph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
-   
+ 
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
     writegalinav(fp, eph, NULL, NULL);
@@ -2121,14 +2092,9 @@ static int writegaleph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 }
 
 static void writebdsd1d2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
+  
     char sys_str[4] = "";
     char time_str[100] = "";
-    int sys = eph->hdr.sys;
-    
     
     if(!fp) return ;
     double ttrs;
@@ -2158,14 +2124,10 @@ static void writebdsd1d2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 
 static void writebdscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
+  
     char sys_str[4] = "";
     char time_str[100] = "";
-    int sys = eph->hdr.sys;
-    
+ 
     if(!fp) return ;
     
     double ttrs;
@@ -2209,10 +2171,6 @@ static void writebdscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 
 static int writebdseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
    
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     if ((eph->hdr.msg_type == NAV_D1 || eph->hdr.msg_type == NAV_D2))
@@ -2280,13 +2238,7 @@ static void writesbseph(FILE *fp, seph_t *eph) {
 
 
 static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
-    gtime_t toc;
-    double data[64];
-    int i=0,j,prn,sat=0,sp=3,mask;
-    char buff[MAXRNXLEN],id[8]="",*p;
-   
-    
-    
+  
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
     writernxnavhdr(fp, &eph->hdr);
@@ -2574,14 +2526,7 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
 static int writernxnav(FILE *fp, const char *opt, double ver, int sys,
                       nav_t *nav)
 {
-    eph_t eph;
-    geph_t geph;
-    seph_t seph;
-    int stat,type;
-    sto_t sto;
-    eop_t eop;
-    ion_t ion;
-    
+   
     rtktrace(3,"readrnxnav: ver=%.2f sys=%d\n",ver,sys);
     
     if (!nav) return 0;
