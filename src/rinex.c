@@ -1549,11 +1549,11 @@ static int readeopbody(FILE *fp, char *buff, eop_t *eop) {
 
 
 /*
- return :
+ return:
  0: normal exit
  1: the ion body not compelete
  2: end of file
- 3:
+ 3: ion transmit time error
  */
 static int readionbody(FILE *fp, char *buff, ion_t *ion) {
     int line_num = 1;
@@ -1755,30 +1755,15 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
     mask=set_sysmask(opt);
     
     while (fgets(buff,MAXRNXLEN,fp)) {
-        
+        if(buff[0] == '>')
+            return 2;
         if (i==0) {
-            
             /* decode satellite field */
-            if (ver>=3.0||sys==SYS_GAL||sys==SYS_QZS) { /* ver.3 or GAL/QZS */
-                strncpy(id,buff,3);
-                sat=satid2no(id);
-                sp=4;
-                if (ver>=3.0) sys=satsys(sat,NULL);
-            }
-            else {
-                prn=(int)str2num(buff,0,2);
-                
-                if (sys==SYS_SBS) {
-                    sat=satno(SYS_SBS,prn+100);
-                }
-                else if (sys==SYS_GLO) {
-                    sat=satno(SYS_GLO,prn);
-                }
-                else if (93<=prn&&prn<=97) { /* extension */
-                    sat=satno(SYS_QZS,prn+100);
-                }
-                else sat=satno(SYS_GPS,prn);
-            }
+            strncpy(id,buff,3);
+            sat=satid2no(id);
+            sp=4;
+            if (ver>=3.0) sys=satsys(sat,NULL);
+        
             /* decode toc field */
             if (str2time(buff+sp,0,19,&toc)) {
                 rtktrace(2,"rinex nav toc error: %23.23s\n",buff);
@@ -2174,52 +2159,63 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
 {
     int mask;
     char buff[MAXRNXLEN];
-    
+    int getNewLine = 0;
     memset(ion, 0, sizeof(ion_t));
-   
+    
     rtktrace(4,"readrnxnavb: ver=%.2f sys=%d\n",ver,sys);
     
     /* set system mask */
     mask=set_sysmask(opt);
-    if (ver >= 4.0) {
-        while (fgets(buff,MAXRNXLEN,fp)) {
-            if(buff[0] == '>') { //TODO: bugs in here
-                nav_data_hdr_t tmp_hdr = { 0 };
-                decode_record_hdr(buff, &tmp_hdr);
-                
-                int data_type = read_nav_data_type(&buff[2]);
-                if (data_type == NAV_STO) {
-                    *type = 5;
-                    return 0;
-                }
-                else if(data_type == NAV_ION) {
-                    *type = 4;
-                    ion->hdr = tmp_hdr;
-                    return (!readionbody(fp, buff, ion));
-                }
-                else if (data_type == NAV_EOP) {
-                    *type = 3;
-                    eop->hdr = tmp_hdr;
-                    return (!readeopbody(fp, buff, eop));
-                }
-                else if (data_type == NAV_EPH) {
-                    
-                    int sta = readrnx4ephbody(fp, opt, ver, sys, type, &tmp_hdr, eph, geph, seph);
-                    if(tmp_hdr.sys == SYS_GLO)
-                        geph->hdr = tmp_hdr;
-                    else if(tmp_hdr.sys &( SYS_GPS | SYS_GAL | SYS_CMP | SYS_QZS | SYS_IRN))
-                        eph->hdr = tmp_hdr;
-                    else if(tmp_hdr.sys == SYS_SBS) 
-                        seph->hdr = tmp_hdr;
-                    
-                    return sta;
-                }
-            }
+    
+    while (getNewLine || fgets(buff,MAXRNXLEN,fp)) {
+        if(buff[0] != '>') {
+            return 0;
         }
+        
+        nav_data_hdr_t tmp_hdr = { 0 };
+        decode_record_hdr(buff, &tmp_hdr);
+        int sta = 0;
+        
+        int data_type = read_nav_data_type(&buff[2]);
+        if(data_type == 0) return 0;
+        
+        if (data_type == NAV_STO) {
+            *type = 5;
+            sta = 0;
+        }
+        else if(data_type == NAV_ION) {
+            *type = 4;
+            ion->hdr = tmp_hdr;
+            sta = readionbody(fp, buff, ion);
+        }
+        else if (data_type == NAV_EOP) {
+            *type = 3;
+            eop->hdr = tmp_hdr;
+            sta = readeopbody(fp, buff, eop);
+        }
+        else if (data_type == NAV_EPH) {
+            sta = readrnx4ephbody(fp, opt, ver, sys, type, &tmp_hdr, eph, geph, seph);
+
+            if(tmp_hdr.sys == SYS_GLO)
+                geph->hdr = tmp_hdr;
+            else if(tmp_hdr.sys &( SYS_GPS | SYS_GAL | SYS_CMP | SYS_QZS | SYS_IRN))
+                eph->hdr = tmp_hdr;
+            else if(tmp_hdr.sys == SYS_SBS)
+                seph->hdr = tmp_hdr;
+        }
+        
+        if(((data_type == NAV_ION || data_type == NAV_EOP) && sta == 1)
+            ||((data_type == NAV_EPH) && sta == 2))
+        {
+            getNewLine = 1;
+            continue;
+        }
+        
+        if(data_type == NAV_ION || data_type == NAV_EOP) return !sta;
+        else if(data_type == NAV_EPH) return sta;
     }
-    else {
-        return readephbody(fp, opt, ver, sys, type, eph, geph, seph);
-    }
+    
+    
     return -1;
 }
 
