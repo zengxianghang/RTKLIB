@@ -631,74 +631,8 @@ static int readrnxh(FILE *fp, double *ver, char *type, int *sys, int *tsys,
 static int writernxh(FILE *fp, double *ver, char *type, int *sys, int *tsys,
                     char tobs[][MAXOBSTYPE][4], nav_t *nav, sta_t *sta)
 {
+    //TODO: support write rinex header
     return 1;
-    double bias;
-    char buff[MAXRNXLEN],*label=buff+60;
-    int i=0,block=0,sat;
-    
-    rtktrace(3,"readrnxh:\n");
-    
-    *ver=2.10; *type=' '; *sys=SYS_GPS; *tsys=TSYS_GPS;
-    
-    while (fgets(buff,MAXRNXLEN,fp)) {
-        
-        if (strlen(buff)<=60) continue;
-        
-        else if (strstr(label,"RINEX VERSION / TYPE")) {
-            *ver=str2num(buff,0,9);
-            *type=*(buff+20);
-            
-            /* satellite system */
-            switch (*(buff+40)) {
-                case ' ':
-                case 'G': *sys=SYS_GPS;  *tsys=TSYS_GPS; break;
-                case 'R': *sys=SYS_GLO;  *tsys=TSYS_UTC; break;
-                case 'E': *sys=SYS_GAL;  *tsys=TSYS_GAL; break; /* v.2.12 */
-                case 'S': *sys=SYS_SBS;  *tsys=TSYS_GPS; break;
-                case 'J': *sys=SYS_QZS;  *tsys=TSYS_QZS; break; /* v.3.02 */
-                case 'C': *sys=SYS_CMP;  *tsys=TSYS_CMP; break; /* v.2.12 */
-                case 'M': *sys=SYS_NONE; *tsys=TSYS_GPS; break; /* mixed */
-                default :
-                    rtktrace(2,"not supported satellite system: %c\n",*(buff+40));
-                    break;
-            }
-            continue;
-        }
-        else if (strstr(label,"PGM / RUN BY / DATE")) continue;
-        else if (strstr(label,"COMMENT")) { /* opt */
-            
-            /* read cnes wl satellite fractional bias */
-            if (strstr(buff,"WIDELANE SATELLITE FRACTIONAL BIASES")||
-                strstr(buff,"WIDELANE SATELLITE FRACTIONNAL BIASES")) {
-                block=1;
-            }
-            else if (block) {
-                /* cnes/cls grg clock */
-                if (!strncmp(buff,"WL",2)&&(sat=satid2no(buff+3))&&
-                    sscanf(buff+40,"%lf",&bias)==1) {
-                    nav->wlbias[sat-1]=bias;
-                }
-                /* cnes ppp-wizard clock */
-                else if ((sat=satid2no(buff+1))&&sscanf(buff+6,"%lf",&bias)==1) {
-                    nav->wlbias[sat-1]=bias;
-                }
-            }
-            continue;
-        }
-        /* file type */
-        switch (*type) {
-            case 'O': decode_obsh(fp,buff,*ver,tsys,tobs,nav,sta); break;
-            case 'N': decode_navh (buff,nav); break;
-            case 'G': decode_gnavh(buff,nav); break;
-            case 'H': decode_hnavh(buff,nav); break;
-            case 'J': decode_navh (buff,nav); break; /* extension */
-            case 'L': decode_navh (buff,nav); break; /* extension */
-        }
-        if (strstr(label,"END OF HEADER")) return 1;
-        
-        if (++i>=MAXPOSHEAD&&*type==' ') break; /* no rinex file */
-    }
-    return 0;
 }
 /* decode obs epoch ----------------------------------------------------------*/
 static int decode_obsepoch(FILE *fp, char *buff, double ver, gtime_t *time,
@@ -1077,46 +1011,8 @@ static int writernxobs(FILE *fp, gtime_t ts, gtime_t te, double tint,
                       const char *opt, int rcv, double ver, int tsys,
                       char tobs[][MAXOBSTYPE][4], obs_t *obs)
 {
-    obsd_t *data;
-    unsigned char slips[MAXSAT][NFREQ]={{0}};
-    int i,n,flag=0,stat=0;
-    
-    rtktrace(4,"readrnxobs: rcv=%d ver=%.2f tsys=%d\n",rcv,ver,tsys);
-    
-    if (!obs||rcv>MAXRCV) return 0;
-    
-    if (!(data=(obsd_t *)malloc(sizeof(obsd_t)*MAXOBS))) return 0;
-    
-    /* read rinex obs data body */
-    while ((n=readrnxobsb(fp,opt,ver,tobs,&flag,data))>=0&&stat>=0) {
-        
-        for (i=0;i<n;i++) {
-            
-            /* utc -> gpst */
-            if (tsys==TSYS_UTC) data[i].time=utc2gpst(data[i].time);
-            
-            /* save cycle-slip */
-            saveslips(slips,data+i);
-        }
-        /* screen data by time */
-        if (n>0&&!screent(data[0].time,ts,te,tint)) continue;
-        
-        for (i=0;i<n;i++) {
-            
-            /* restore cycle-slip */
-            restslips(slips,data+i);
-            
-            data[i].rcv=(unsigned char)rcv;
-            
-            /* save obs data */
-            if ((stat=addobsdata(obs,data+i))<0) break;
-        }
-    }
-    rtktrace(4,"readrnxobs: nobs=%d stat=%d\n",obs->n,stat);
-    
-    free(data);
-    
-    return stat;
+   //TODO: write rinex obs data
+    return 0;
 }
 /* decode ephemeris ----------------------------------------------------------*/
 static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
