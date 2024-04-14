@@ -1346,9 +1346,8 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         }
     }
     
-    //decode BDS CNAV1
-    if(hdr->sys == SYS_CMP && (hdr->msg_type == NAV_CNV1 || hdr->msg_type == NAV_CNV2
-                               || hdr->msg_type == NAV_CNV3)) {
+    //decode BDS CNAV
+    if(hdr->sys == SYS_CMP && (hdr->msg_type &(NAV_CNV1 | NAV_CNV2 | NAV_CNV3))) {
         eph->Adot = data[3];
         eph->delta_n0 = data[5];
         eph->delta_n0_dot = data[20];
@@ -1849,10 +1848,9 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
     char buff[MAXRNXLEN],id[8]="",*p;
    
     int max_data_cnt = 31;
-    if((hdr->sys == SYS_GPS || hdr->sys == SYS_QZS) && hdr->msg_type == NAV_CNAV) max_data_cnt = 35;
-    else if((hdr->sys == SYS_GPS || hdr->sys == SYS_QZS) && hdr->msg_type == NAV_CNV2) max_data_cnt = 39;
-    else if(hdr->sys == SYS_CMP
-            && (hdr->msg_type == NAV_CNV1 || hdr->msg_type == NAV_CNV2)) max_data_cnt = 39;
+    if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNAV) max_data_cnt = 35;
+    else if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNV2) max_data_cnt = 39;
+    else if(hdr->sys == SYS_CMP && (hdr->msg_type & ( NAV_CNV1 | NAV_CNV2))) max_data_cnt = 39;
     else if(hdr->sys == SYS_CMP && hdr->msg_type == NAV_CNV3) max_data_cnt = 35;
     
     rtktrace(4,"readrnxnavb: ver=%.2f sys=%d\n",ver,sys);
@@ -1923,7 +1921,7 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
 
 }
 
-static void writegpscnv2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static void writegpscnv2(FILE *fp, eph_t *eph) {
     char sys_str[4] = "";
     char time_str[100] = "";
     
@@ -1957,7 +1955,7 @@ static void writegpscnv2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
     fprintf(fp, "%*s\n", 38, "");
 }
 
-static void writegpscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static void writegpscnav(FILE *fp, eph_t *eph) {
    
     char sys_str[4] = "";
     char time_str[100] = "";
@@ -1990,7 +1988,7 @@ static void writegpscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 }
 
-static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static void writegpslnav(FILE *fp, eph_t *eph) {
    
     char sys_str[4] = "";
     char time_str[100] = "";
@@ -2035,20 +2033,20 @@ static void writegpslnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 }
 
-static int writegpseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static int writegpseph(FILE *fp, eph_t *eph) {
    
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
-    if(eph->hdr.msg_type == NAV_LNAV) writegpslnav(fp, eph, NULL, NULL);
-    else if(eph->hdr.msg_type == NAV_CNAV) writegpscnav(fp, eph, NULL, NULL);
-    else if(eph->hdr.msg_type == NAV_CNV2) writegpscnv2(fp, eph, NULL, NULL);
+    if(eph->hdr.msg_type == NAV_LNAV) writegpslnav(fp, eph);
+    else if(eph->hdr.msg_type == NAV_CNAV) writegpscnav(fp, eph);
+    else if(eph->hdr.msg_type == NAV_CNV2) writegpscnv2(fp, eph);
     
     return -1;
 
 }
 
 
-static void writegalinav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static void writegalinav(FILE *fp, eph_t *eph) {
   
     char sys_str[4] = "";
     char time_str[100] = "";
@@ -2081,17 +2079,17 @@ static void writegalinav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 
 
-static int writegaleph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static int writegaleph(FILE *fp, eph_t *eph) {
  
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
-    writegalinav(fp, eph, NULL, NULL);
+    writegalinav(fp, eph);
     
     return -1;
 
 }
 
-static void writebdsd1d2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static void writebdsd1d2(FILE *fp, eph_t *eph) {
   
     char sys_str[4] = "";
     char time_str[100] = "";
@@ -2123,7 +2121,7 @@ static void writebdsd1d2(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 }
 
 
-static void writebdscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static void writebdscnav(FILE *fp, eph_t *eph) {
   
     char sys_str[4] = "";
     char time_str[100] = "";
@@ -2170,13 +2168,13 @@ static void writebdscnav(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 }
 
 
-static int writebdseph(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static int writebdseph(FILE *fp, eph_t *eph) {
    
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     if ((eph->hdr.msg_type == NAV_D1 || eph->hdr.msg_type == NAV_D2))
-        writebdsd1d2(fp, eph, NULL, NULL);
+        writebdsd1d2(fp, eph);
     else
-        writebdscnav(fp, eph, NULL, NULL);
+        writebdscnav(fp, eph);
     
     return -1;
 
@@ -2237,23 +2235,23 @@ static void writesbseph(FILE *fp, seph_t *eph) {
 }
 
 
-static int writernx4ephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static int writernx4ephbody(FILE *fp, eph_t *eph) {
   
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
     writernxnavhdr(fp, &eph->hdr);
-    if (eph->hdr.sys == SYS_GPS || eph->hdr.sys == SYS_QZS || eph->hdr.sys == SYS_IRN)
-        writegpseph(fp, eph, NULL, NULL);
+    if (eph->hdr.sys&( SYS_GPS | SYS_QZS | SYS_IRN))
+        writegpseph(fp, eph);
     else if(eph->hdr.sys == SYS_GAL) 
-        writegaleph(fp, eph, NULL, NULL);
+        writegaleph(fp, eph);
     else if(eph->hdr.sys == SYS_CMP)
-        writebdseph(fp, eph, NULL, NULL);
+        writebdseph(fp, eph);
     
     return -1;
 
 }
 
-static int writernx4gephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static int writernx4gephbody(FILE *fp, geph_t *geph) {
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
     writernxnavhdr(fp, &geph->hdr);
@@ -2263,7 +2261,7 @@ static int writernx4gephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
 
 }
 
-static int writernx4sephbody(FILE *fp, eph_t *eph, geph_t *geph, seph_t *seph) {
+static int writernx4sephbody(FILE *fp, seph_t *seph) {
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     
     writernxnavhdr(fp, &seph->hdr);
@@ -2313,8 +2311,7 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                     int sta = readrnx4ephbody(fp, opt, ver, sys, type, &tmp_hdr, eph, geph, seph);
                     if(tmp_hdr.sys == SYS_GLO)
                         geph->hdr = tmp_hdr;
-                    else if(tmp_hdr.sys == SYS_GPS || tmp_hdr.sys == SYS_GAL 
-                            || tmp_hdr.sys == SYS_CMP || tmp_hdr.sys == SYS_QZS || tmp_hdr.sys == SYS_IRN)
+                    else if(tmp_hdr.sys &( SYS_GPS | SYS_GAL | SYS_CMP | SYS_QZS | SYS_IRN))
                         eph->hdr = tmp_hdr;
                     else if(tmp_hdr.sys == SYS_SBS) 
                         seph->hdr = tmp_hdr;
@@ -2348,13 +2345,13 @@ static void writernxion(FILE *fp, ion_t *ion)
 static void writernxnavb(FILE *fp, nav_t *nav)
 {
     int i;
-    if(!fp) return;
+    if(!fp || !nav) return;
     
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     for(i=0;i<nav->neop;i++)
         writernxeop(fp, &nav->eop[i]);
     for(i=0;i<nav->nsto;i++)
-    {}
+    {} //TODO: support sto
     for(i=0;i<nav->nion;i++)
         writernxion(fp, &nav->ion[i]);
 #if 0
@@ -2375,20 +2372,20 @@ static void writernxnavb(FILE *fp, nav_t *nav)
     for(i=0;i<nav->n;i++)
     {
         if(nav->eph[i].hdr.sys == SYS_GPS)
-            writernx4ephbody(fp, &nav->eph[i], NULL, NULL);
+            writernx4ephbody(fp, &nav->eph[i]);
     }
     for(i=0;i<nav->ns;i++)
     {
-        writernx4sephbody(fp, NULL, NULL, &nav->seph[i]);
+        writernx4sephbody(fp, &nav->seph[i]);
     }
     for(i=0;i<nav->ng;i++)
     {
-        writernx4gephbody(fp, NULL, &nav->geph[i], NULL);
+        writernx4gephbody(fp, &nav->geph[i]);
     }
     for(i=0;i<nav->n;i++)
     {
         if(nav->eph[i].hdr.sys != SYS_GPS)
-            writernx4ephbody(fp, &nav->eph[i], NULL, NULL);
+            writernx4ephbody(fp, &nav->eph[i]);
     }
 #endif
 }
@@ -2523,16 +2520,12 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
     }
     return nav->n>0||nav->ng>0||nav->ns>0;
 }
-static int writernxnav(FILE *fp, const char *opt, double ver, int sys,
-                      nav_t *nav)
+static int writernxnav(FILE *fp, nav_t *nav)
 {
-   
-    rtktrace(3,"readrnxnav: ver=%.2f sys=%d\n",ver,sys);
-    
-    if (!nav) return 0;
+    if (!nav || !fp) return 0;
     writernxnavb(fp, nav);
-   
-    return nav->n>0||nav->ng>0||nav->ns>0;
+    
+    return 0;
 }
 /* read rinex clock ----------------------------------------------------------*/
 static int readrnxclk(FILE *fp, const char *opt, int index, nav_t *nav)
@@ -2642,7 +2635,7 @@ static int writernxfp(FILE *fp, gtime_t ts, gtime_t te, double tint,
     if(nav)
     {
         if (!writernxh(fp,&ver,type,&sys,&tsys,tobs,nav,sta)) return 0;
-        return writernxnav(fp,opt,ver,sys,nav);
+        return writernxnav(fp,nav);
     }
     
     return 0;
