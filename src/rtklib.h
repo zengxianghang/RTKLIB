@@ -873,8 +873,17 @@ typedef struct { //see rinex4.01, table A30
 
 typedef struct { //see rinex4.01, table A31
     nav_data_hdr_t hdr;
-    gtime_t ref_time;
-    
+    gtime_t ref_time; //ref time
+    gtime_t ttr; //trans time
+    double x;
+    double dx;
+    double dx2;
+    double y;
+    double dy;
+    double dy2;
+    double ut;
+    double dut;
+    double dut2;
 }eop_t;
 
 typedef struct {        /* QZSS LEX ionosphere correction type */

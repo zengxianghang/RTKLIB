@@ -1508,6 +1508,8 @@ static int read_nav_msg_type(char *line) {
         return NAV_FNAV;
     else if(!strcmp(type, "INAV"))
         return NAV_INAV;
+    else if (!strcmp(type, "D1D2"))
+        return NAV_D1D2;
     else if (strstr(type, "D1"))
         return NAV_D1;
     else if(strstr(type, "D2"))
@@ -1522,8 +1524,6 @@ static int read_nav_msg_type(char *line) {
         return NAV_CNV2;
     else if (!strcmp(type, "CNV3"))
         return NAV_CNV3;
-    else if (!strcmp(type, "D1D2"))
-        return NAV_D1D2;
     else if (!strcmp(type, "IFNV"))
         return NAV_IFNV;
     else if (!strcmp(type, "CNVX"))
@@ -1588,6 +1588,70 @@ static void writernxnavhdr(FILE *fp, nav_data_hdr_t *hdr)
     
     fprintf(fp, "> %s %s%02d %s\n", data_str, sys_str,hdr->prn, msg_str);
 }
+
+static void decode_eop(double *data, eop_t *eop) {
+    eop->x = data[0];
+    eop->dx = data[1];
+    eop->dx2 = data[2];
+    
+    eop->y = data[4];
+    eop->dy = data[5];
+    eop->dy2 = data[6];
+    
+    int week;
+    time2gpst(eop->ref_time, &week);
+    eop->ttr=adjweek(gpst2time(week,data[7]),eop->ref_time);
+    
+    eop->ut = data[8];
+    eop->dut = data[9];
+    eop->dut2 = data[10];
+    
+}
+
+static int readeopbody(FILE *fp, char *buff, eop_t *eop) {
+    int line_num = 1;
+    int j = 0;
+    int sp = 4;
+    char *p = NULL;
+    int data_idx = 0;
+    int max_line_cnt = EOP_LINE_CNT;
+    double data[64];
+    
+    line_num += 1;
+    
+    while(fgets(buff,MAXRNXLEN,fp)) {
+        if(buff[0] == '>')
+            return 1;
+        if(line_num > 1) {
+            if (line_num == 2) {
+                if (str2time(buff+sp,0,19,&(eop->ref_time))) {
+                    rtktrace(2,"rinex nav ion transmit time error: %23.23s\n",buff);
+                    return 3;
+                }
+                p = buff + 19;
+            } else {
+                p = buff;
+            }
+            
+            /* decode data fields */
+            for (j=0,p=p+sp;j<4;j++,p+=19) {
+                if (*p == '\n')
+                    break;
+                data[data_idx]=str2num(p,0,19);
+                data_idx += 1;
+            }
+        }
+        
+        line_num += 1;
+        if(line_num > max_line_cnt) {
+            decode_eop(data, eop);
+            return 0;
+        }
+    }
+    
+    return 2;
+}
+
 
 /*
  return :
@@ -1683,40 +1747,22 @@ static void writeionbody(FILE *fp, ion_t *ion) {
 }
 
 
-/*
- return :
- 0: normal exit
- 1: the eop body not compelete
- 2: end of file
- */
-static int readeopbody(FILE *fp, char *buff, const char *opt, double ver, int sys,
-                       int *type, eph_t *eph, geph_t *geph, seph_t *seph) {
-    int line_num = 1;
-    //decode ion line 1
+static void writeeopbody(FILE *fp, eop_t *eop) {
+    char time_str[100] = "";
+    double sec = time2gpst(eop->ttr, NULL);
+    if(!fp) return ;
     
-    line_num += 1;
+    time2str2(eop->ref_time, time_str, 0);
+    fprintf(fp, "    %s", time_str);
     
-    while(fgets(buff,MAXRNXLEN,fp)) {
-        if(buff[0] == '>')
-            return 1;
-        if(line_num == 2) {
-            //decode eop line 2
-            
-        }else if(line_num == 3) {
-            //decode eop line 3
-            
-        } else if(line_num == 4) {
-            
-        }
-        
-        line_num +=1;
-        if(line_num > EOP_LINE_CNT) {
-            return 0;
-        }
-    }
-    
-    return 2;
+    fprintf(fp, "%19.12e%19.12e%19.12e\n"
+            "    %*s%19.12e%19.12e%19.12e\n"
+            "    %19.12e%19.12e%19.12e%19.12e\n",
+            eop->x, eop->dx, eop->dx2,
+            19, "", eop->y, eop->dy, eop->dy2,
+            sec, eop->ut, eop->dut, eop->dut2);
 }
+
 
 
 static int readephbody(FILE *fp, const char *opt, double ver, int sys,
@@ -2291,7 +2337,7 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
     mask=set_sysmask(opt);
     if (ver >= 4.0) {
         while (fgets(buff,MAXRNXLEN,fp)) {
-            if(buff[0] == '>') { //bugs in here
+            if(buff[0] == '>') { //TODO: bugs in here
                 nav_data_hdr_t tmp_hdr = { 0 };
                 decode_record_hdr(buff, &tmp_hdr);
                 
@@ -2307,7 +2353,8 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                 }
                 else if (data_type == NAV_EOP) {
                     *type = 3;
-                    return 0;
+                    eop->hdr = tmp_hdr;
+                    return (!readeopbody(fp, buff, eop));
                 }
                 else if (data_type == NAV_EPH) {
                     
@@ -2331,6 +2378,13 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
     return -1;
 }
 
+static void writernxeop(FILE *fp, eop_t *eop)
+{
+    if(!fp) return;
+    
+    writernxnavhdr(fp, &eop->hdr);
+    writeeopbody(fp, eop);
+}
 
 static void writernxion(FILE *fp, ion_t *ion)
 {
@@ -2346,7 +2400,7 @@ static void writernxnavb(FILE *fp, nav_t *nav)
     
     rtktrace(4,"writernxnavb: ver=%.2f\n",4.01);
     for(i=0;i<nav->neop;i++)
-    {}
+        writernxeop(fp, &nav->eop[i]);
     for(i=0;i<nav->nsto;i++)
     {}
     for(i=0;i<nav->nion;i++)
