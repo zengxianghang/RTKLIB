@@ -2151,9 +2151,82 @@ static int writernx4sephbody(FILE *fp, seph_t *seph) {
     return -1;
 
 }
-
 /* read rinex navigation data body -------------------------------------------*/
 static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
+                       int *type, eph_t *eph, geph_t *geph, seph_t *seph)
+{
+    gtime_t toc;
+    double data[64];
+    int i=0,j,prn,sat=0,sp=3,mask;
+    char buff[MAXRNXLEN],id[8]="",*p;
+    
+    rtktrace(4,"readrnxnavb: ver=%.2f sys=%d\n",ver,sys);
+    
+    /* set system mask */
+    mask=set_sysmask(opt);
+    
+    while (fgets(buff,MAXRNXLEN,fp)) {
+        
+        if (i==0) {
+            
+            /* decode satellite field */
+            if (ver>=3.0||sys==SYS_GAL||sys==SYS_QZS) { /* ver.3 or GAL/QZS */
+                strncpy(id,buff,3);
+                sat=satid2no(id);
+                sp=4;
+                if (ver>=3.0) sys=satsys(sat,NULL);
+            }
+            else {
+                prn=(int)str2num(buff,0,2);
+                
+                if (sys==SYS_SBS) {
+                    sat=satno(SYS_SBS,prn+100);
+                }
+                else if (sys==SYS_GLO) {
+                    sat=satno(SYS_GLO,prn);
+                }
+                else if (93<=prn&&prn<=97) { /* extension */
+                    sat=satno(SYS_QZS,prn+100);
+                }
+                else sat=satno(SYS_GPS,prn);
+            }
+            /* decode toc field */
+            if (str2time(buff+sp,0,19,&toc)) {
+                rtktrace(2,"rinex nav toc error: %23.23s\n",buff);
+                return 0;
+            }
+            /* decode data fields */
+            for (j=0,p=buff+sp+19;j<3;j++,p+=19) {
+                data[i++]=str2num(p,0,19);
+            }
+        }
+        else {
+            /* decode data fields */
+            for (j=0,p=buff+sp;j<4;j++,p+=19) {
+                data[i++]=str2num(p,0,19);
+            }
+            /* decode ephemeris */
+            if (sys==SYS_GLO&&i>=15) {
+                if (!(mask&sys)) return 0;
+                *type=1;
+                return decode_geph(ver,sat,toc,data,geph);
+            }
+            else if (sys==SYS_SBS&&i>=15) {
+                if (!(mask&sys)) return 0;
+                *type=2;
+                return decode_seph(ver,sat,toc,data,seph);
+            }
+            else if (i>=31) {
+                if (!(mask&sys)) return 0;
+                *type=0;
+                return decode_eph(ver,sat,toc,data,eph);
+            }
+        }
+    }
+    return -1;
+}
+/* read rinex navigation data body -------------------------------------------*/
+static int readrnx4navb(FILE *fp, const char *opt, double ver, int sys,
                        int *type, eph_t *eph, geph_t *geph, seph_t *seph,
                        sto_t *sto, eop_t *eop, ion_t *ion)
 {
@@ -2394,23 +2467,40 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
     
     if (!nav) return 0;
     
-    /* read rinex navigation data body */
-    while ((stat=readrnxnavb(fp,opt,ver,sys,&type,&eph,&geph,&seph, &sto, &eop, &ion))>=0) {
-        
-        /* add ephemeris to navigation data */
-        if (stat) {
-            switch (type) {
-                case 1 : stat=add_geph(nav, &geph); break;
-                case 2 : stat=add_seph(nav, &seph); break;
-                case 3 : stat=add_eop(nav, &eop); break;
-                case 4 : stat=add_ion(nav, &ion); break;
-                case 5 : stat=add_sto(nav, &sto); break;
-                default: stat=add_eph(nav, &eph); break;
+    if (ver >= 4) {
+        /* read rinex navigation data body */
+        while ((stat=readrnx4navb(fp,opt,ver,sys,&type,&eph,&geph,&seph, &sto, &eop, &ion))>=0) {
+            
+            /* add ephemeris to navigation data */
+            if (stat) {
+                switch (type) {
+                    case 1 : stat=add_geph(nav, &geph); break;
+                    case 2 : stat=add_seph(nav, &seph); break;
+                    case 3 : stat=add_eop(nav, &eop); break;
+                    case 4 : stat=add_ion(nav, &ion); break;
+                    case 5 : stat=add_sto(nav, &sto); break;
+                    default: stat=add_eph(nav, &eph); break;
+                }
+                if (!stat) return 0;
             }
-            if (!stat) return 0;
         }
+        return nav->n>0||nav->ng>0||nav->ns>0;
+    } else {
+        /* read rinex navigation data body */
+        while ((stat=readrnxnavb(fp,opt,ver,sys,&type,&eph,&geph,&seph))>=0) {
+            
+            /* add ephemeris to navigation data */
+            if (stat) {
+                switch (type) {
+                    case 1 : stat=add_geph(nav,&geph); break;
+                    case 2 : stat=add_seph(nav,&seph); break;
+                    default: stat=add_eph (nav,&eph ); break;
+                }
+                if (!stat) return 0;
+            }
+        }
+        return nav->n>0||nav->ng>0||nav->ns>0;
     }
-    return nav->n>0||nav->ng>0||nav->ns>0;
 }
 static int writernxnav(FILE *fp, nav_t *nav)
 {
@@ -2867,9 +2957,6 @@ extern int input_rnxctr(rnxctr_t *rnx, FILE *fp)
     geph_t geph={0};
     seph_t seph={0};
     int n,sys,stat,flag,prn,type;
-    sto_t sto;
-    eop_t eop;
-    ion_t ion;
     
     rtktrace(4,"input_rnxctr:\n");
     
@@ -2893,7 +2980,7 @@ extern int input_rnxctr(rnxctr_t *rnx, FILE *fp)
         case 'J': sys=SYS_QZS ; break; /* extension */
         default: return 0;
     }
-    if ((stat=readrnxnavb(fp,rnx->opt,rnx->ver,sys,&type,&eph,&geph,&seph, &sto, &eop, &ion))<=0) {
+    if ((stat=readrnxnavb(fp,rnx->opt,rnx->ver,sys,&type,&eph,&geph,&seph))<=0) {
         return stat<0?-2:0;
     }
     if (type==1) {
