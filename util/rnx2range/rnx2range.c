@@ -21,7 +21,7 @@ static void usage(FILE *stream)
         "  --psr-sigma METERS       synthetic pseudorange sigma (default 0.500)\n"
         "  --adr-sigma CYCLES       synthetic ADR sigma (default 0.050)\n"
         "  --port NAME              synthetic ASCII header port (default COM1)\n"
-        "  --time-status NAME       synthetic time status (default UNKNOWN)\n"
+        "  --time-status NAME       synthetic time status (default FINE)\n"
         "  --idle-time PERCENT      synthetic receiver idle time (default 0.0)\n"
         "  --receiver-status HEX    synthetic receiver status (default 00000000)\n"
         "  --reserved HEX           synthetic reserved header field (default 0)\n"

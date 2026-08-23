@@ -121,10 +121,11 @@ source metadata is insufficient.
 
 The RANGEA header port, idle percentage, time status, receiver status, reserved
 word and software version are synthetic and configurable. Pseudorange/ADR sigma
-and tracking state are also synthetic. The default time status is `UNKNOWN` so
-the generated header does not assert receiver steering quality. Required RANGE
-fields that have no source observation are written as zero placeholders (ADR is
-also marked phase-unlocked) and counted separately for ADR, Doppler and C/No.
+and tracking state are also synthetic. The default time status is `FINE`; use
+`--time-status` when another NovAtel time status is required. This status is a
+conversion policy rather than receiver-measured steering quality. Required
+RANGE fields that have no source observation are written as zero placeholders
+(ADR is also marked phase-unlocked) and counted separately for ADR, Doppler and C/No.
 Derived locktime and the inferred half-cycle-added field are counted too. None
 of these values should be interpreted as receiver-measured quality.
 

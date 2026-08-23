@@ -1633,7 +1633,7 @@ void rnxrange_default_options(rnxrange_options_t *options)
     if (!options) return;
     memset(options,0,sizeof(*options));
     strcpy(options->port,"COM1");
-    strcpy(options->time_status,"UNKNOWN");
+    strcpy(options->time_status,"FINE");
     options->idle_time=0.0;
     options->receiver_status=0;
     options->reserved=0;

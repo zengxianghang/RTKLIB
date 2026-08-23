@@ -254,6 +254,8 @@ static int test_mixed_mapping_and_crc(void)
           report.skipped_unsupported_values+report.conversion_errors);
     rewind(output);
     CHECK(fgets(line,sizeof(line),output)!=NULL);
+    CHECK(strncmp(line,"#RANGEA,COM1,0,0.0,FINE,",
+                  sizeof("#RANGEA,COM1,0,0.0,FINE,")-1)==0);
     CHECK(parse_range_line(line,records,16,&count));
     CHECK(count==6);
     CHECK(fabs(records[0].adr-(-100.0))<1E-9); /* L1C scaled by 10 */
@@ -827,7 +829,7 @@ static int test_repository_real_fixture(void)
     CHECK(report.conversion_errors==0);
     rewind(output);
     CHECK(fgets(line,sizeof(line),output)!=NULL);
-    CHECK(strstr(line,"*8a0d0759\r\n")!=NULL); /* fixed golden vector */
+    CHECK(strstr(line,"*e2caacdd\r\n")!=NULL); /* fixed golden vector */
     CHECK(parse_range_line(line,records,32,&count)&&count==16);
     fclose(input);
     fclose(output);
