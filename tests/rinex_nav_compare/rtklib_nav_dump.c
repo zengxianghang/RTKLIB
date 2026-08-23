@@ -110,7 +110,9 @@ static void dump_eph(const char *file, int i, const eph_t *e)
     int sys,prn;
     double ttr;
     record_info(e->sat,&e->hdr,&sys,&prn);
-    ttr=sys==SYS_CMP?time2bdt(e->ttr,NULL):time2gpst(e->ttr,NULL);
+    /* eph_t stores BDS transmission time in GPST; convert to BDT before
+     * exporting the canonical RINEX field, matching rinex.c's writer. */
+    ttr=sys==SYS_CMP?time2bdt(gpst2bdt(e->ttr),NULL):time2gpst(e->ttr,NULL);
     E(file,"EPH",sys,prn,e->hdr.msg_type,e->hdr.subtype,i,e->toc,"sat",-1,e->sat,1);
     E(file,"EPH",sys,prn,e->hdr.msg_type,e->hdr.subtype,i,e->toc,"iode",-1,e->iode,1);
     E(file,"EPH",sys,prn,e->hdr.msg_type,e->hdr.subtype,i,e->toc,"iodc",-1,e->iodc,1);

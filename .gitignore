@@ -12,3 +12,4 @@ rtklib.xcodeproj
 data
 artifacts/rinex_nav_compare/
 __pycache__/
+tests/rinex_nav_compare/nav_solutions_ref/target/
