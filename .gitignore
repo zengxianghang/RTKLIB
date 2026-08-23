@@ -10,3 +10,5 @@ __history
 rtklib.xcodeproj
 *.json
 data
+artifacts/rinex_nav_compare/
+__pycache__/

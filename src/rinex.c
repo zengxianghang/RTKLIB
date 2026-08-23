@@ -130,6 +130,15 @@ static void setstr(char *dst, const char *src, int n)
     *p--='\0';
     while (p>=dst&&*p==' ') *p--='\0';
 }
+/* test whether a fixed-width numeric field contains a value */
+static int field_present(const char *src, int n)
+{
+    int i;
+    for (i=0;i<n;i++) {
+        if (src[i]!=' '&&src[i]!='\r'&&src[i]!='\n'&&src[i]!='\0') return 1;
+    }
+    return 0;
+}
 /* adjust time considering week handover -------------------------------------*/
 static gtime_t adjweek(gtime_t t, gtime_t t0)
 {
@@ -183,6 +192,15 @@ static int uraindex(double value)
     int i;
     for (i=0;i<15;i++) if (ura_eph[i]>=value) break;
     return i;
+}
+/* decode the RINEX SV-accuracy field for the configured eph_t representation */
+static double urafromrnx(double value)
+{
+#if URA2URAI
+    return uraindex(value);
+#else
+    return value;
+#endif
 }
 /* initialize station parameter ----------------------------------------------*/
 static void init_sta(sta_t *sta)
@@ -1053,7 +1071,7 @@ static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
         
         eph->code=(int)data[20];      /* GPS: codes on L2 ch */
         eph->svh =(int)data[24];      /* sv health */
-        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+        eph->sva=urafromrnx(data[23]); /* SV accuracy (m or URA index) */
         eph->flag=(int)data[22];      /* GPS: L2 P data flag */
         
         eph->tgd[0]=   data[25];      /* TGD */
@@ -1079,7 +1097,7 @@ static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
                                       /* bit   4-5: E5a HS */
                                       /* bit     6: E5b DVS */
                                       /* bit   7-8: E5b HS */
-        eph->sva =uraindex(data[23]); /* ura (m->index) */
+        eph->sva =urafromrnx(data[23]); /* SV accuracy (m or URA index) */
         
         eph->tgd[0]=   data[25];      /* BGD E5a/E1 */
         eph->tgd[1]=   data[26];      /* BGD E5b/E1 */
@@ -1096,7 +1114,7 @@ static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
         eph->ttr=adjweek(eph->ttr,toc);
         
         eph->svh =(int)data[24];      /* satH1 */
-        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+        eph->sva=urafromrnx(data[23]); /* SV accuracy (m or URA index) */
         
         eph->tgd[0]=   data[25];      /* TGD1 B1/B3 */
         eph->tgd[1]=   data[26];      /* TGD2 B2/B3 */
@@ -1154,7 +1172,7 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         eph->code=(int)data[20];      /* GPS: codes on L2 ch */
         eph->svh =(int)data[24];      /* sv health */
 #if URA2URAI
-        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+        eph->sva=urafromrnx(data[23]); /* SV accuracy (m or URA index) */
 #else
         eph->sva=(data[23]);  /* do NOT convert ura (m->index) */
 #endif
@@ -1184,7 +1202,7 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
                                       /* bit     6: E5b DVS */
                                       /* bit   7-8: E5b HS */
 #if URA2URAI
-        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+        eph->sva=urafromrnx(data[23]); /* SV accuracy (m or URA index) */
 #else
         eph->sva=(data[23]);  /* do NOT convert ura (m->index) */
 #endif
@@ -1204,7 +1222,7 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         
         eph->svh =(int)data[24];      /* satH1 */
 #if URA2URAI
-        eph->sva=uraindex(data[23]);  /* ura (m->index) */
+        eph->sva=urafromrnx(data[23]); /* SV accuracy (m or URA index) */
 #else
         eph->sva=(data[23]);  /* do NOT convert ura (m->index) */
 #endif
@@ -1230,6 +1248,8 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         eph->urai_ned[1] = data[22];
         eph->urai_ned[2] = data[26];
         eph->urai_ed = data[23];
+        eph->svh = (int)data[24];
+        eph->tgd[0] = data[25];
         
         if (hdr->msg_type == NAV_CNAV) {
             memcpy(eph->isc, &data[27], sizeof(double) * 4);
@@ -1423,6 +1443,14 @@ static int read_nav_msg_type(char *line) {
         return NAV_IFNV;
     else if (!strcmp(type, "CNVX"))
         return NAV_CNVX;
+    else if (!strcmp(type, "L1NV"))
+        return NAV_L1NV;
+    else if (!strcmp(type, "L1OC"))
+        return NAV_L1OC;
+    else if (!strcmp(type, "L3OC"))
+        return NAV_L3OC;
+    else if (!strcmp(type, "LXOC"))
+        return NAV_LXOC;
     
     return 0;
 }
@@ -1433,31 +1461,30 @@ static int read_nav_msg_type(char *line) {
  1: the sto body not compelete
  2: end of file
  */
-static int readstobody(FILE *fp, char *buff, const char *opt, double ver, int sys,
-                       int *type, eph_t *eph, geph_t *geph, seph_t *seph) {
-    int line_num = 1;
-    //decode sto line 1
-    
-    line_num += 1;
-    
-    while(fgets(buff,MAXRNXLEN,fp)) {
-        if(buff[0] == '>')
-            return 1;
-        if(line_num == 2) {
-            //decode sto line 2
-            
-        }else if(line_num == 3){
-            //decode sto line 3
-            
-        }
-        
-        line_num +=1;
-        if(line_num > STO_LINE_CNT) {
-            return 0;
-        }
+static int readstobody(FILE *fp, char *buff, sto_t *sto)
+{
+    int i;
+    char *p;
+
+    /* line 0: reference epoch, correction type and optional identifier */
+    if (!fgets(buff,MAXRNXLEN,fp)) return 2;
+    if (buff[0]=='>') return 1;
+    if (str2time(buff+4,0,19,&sto->ref_time)) return 3;
+    setstr(sto->corr_type,buff+24,4);
+    setstr(sto->corr_id,buff+43,18);
+
+    /* line 1: transmission time and polynomial coefficients */
+    if (!fgets(buff,MAXRNXLEN,fp)) return 2;
+    if (buff[0]=='>') return 1;
+    p=buff+4;
+    for (i=0;i<4;i++,p+=19) {
+        sto->present[i]=(unsigned char)field_present(p,19);
     }
-    
-    return 2;
+    sto->trans_time=str2num(buff,4,19);
+    sto->a0=str2num(buff,23,19);
+    sto->a1=str2num(buff,42,19);
+    sto->a2=str2num(buff,61,19);
+    return 0;
 }
 
 
@@ -1466,6 +1493,7 @@ static void decode_record_hdr(char *buff, nav_data_hdr_t *hdr) {
     hdr->sys = str2sys(&buff[6]);
     hdr->prn = (int)str2num(&buff[7], 0, 2);
     hdr->msg_type = read_nav_msg_type(&buff[10]);
+    setstr(hdr->subtype,&buff[15],4);
 }
 
 
@@ -1489,17 +1517,24 @@ static void decode_eop(double *data, eop_t *eop) {
     eop->dx = data[1];
     eop->dx2 = data[2];
     
-    eop->y = data[4];
-    eop->dy = data[5];
-    eop->dy2 = data[6];
+    eop->y = data[3];
+    eop->dy = data[4];
+    eop->dy2 = data[5];
     
     int week;
-    time2gpst(eop->ref_time, &week);
-    eop->ttr=adjweek(gpst2time(week,data[7]),eop->ref_time);
+    if (eop->hdr.sys==SYS_CMP) {
+        time2bdt(eop->ref_time,&week);
+        eop->ttr=bdt2gpst(bdt2time(week,data[6]));
+    }
+    else {
+        time2gpst(eop->ref_time,&week);
+        eop->ttr=gpst2time(week,data[6]);
+    }
+    eop->ttr=adjweek(eop->ttr,eop->ref_time);
     
-    eop->ut = data[8];
-    eop->dut = data[9];
-    eop->dut2 = data[10];
+    eop->ut = data[7];
+    eop->dut = data[8];
+    eop->dut2 = data[9];
     
 }
 
@@ -1524,6 +1559,9 @@ static int readeopbody(FILE *fp, char *buff, eop_t *eop) {
                     return 3;
                 }
                 p = buff + 19;
+            }
+            else if (line_num == 3) {
+                p = buff + 19;
             } else {
                 p = buff;
             }
@@ -1533,6 +1571,7 @@ static int readeopbody(FILE *fp, char *buff, eop_t *eop) {
                 if (*p == '\n')
                     break;
                 data[data_idx]=str2num(p,0,19);
+                eop->present[data_idx]=(unsigned char)field_present(p,19);
                 data_idx += 1;
             }
         }
@@ -1566,6 +1605,10 @@ static int readionbody(FILE *fp, char *buff, ion_t *ion) {
 //    memset(ion, 0, sizeof(ion_t));
     if(ion->hdr.sys == SYS_GAL)
         max_line_cnt = 3;
+    else if (ion->hdr.msg_type==NAV_L1NV && !strcmp(ion->hdr.subtype,"KLOB"))
+        max_line_cnt = 5;
+    else if (ion->hdr.msg_type==NAV_L1NV && !strcmp(ion->hdr.subtype,"NEQN"))
+        max_line_cnt = 8;
     line_num += 1;
     
     while(fgets(buff,MAXRNXLEN,fp)) {
@@ -1586,9 +1629,13 @@ static int readionbody(FILE *fp, char *buff, ion_t *ion) {
             for (j=0,p=p+sp;j<4;j++,p+=19) {
                 if (*p == '\n')
                     break;
+                if (data_idx<32) {
+                    ion->data[data_idx]=str2num(p,0,19);
+                    ion->present[data_idx]=(unsigned char)field_present(p,19);
+                }
                 if(ion->hdr.sys == SYS_GAL && data_idx == 3)
                     ion->region=str2num(p,0,19);
-                else
+                else if (data_idx<9)
                     ion->alpha[data_idx]=str2num(p,0,19);
                 data_idx += 1;
             }
@@ -1596,6 +1643,7 @@ static int readionbody(FILE *fp, char *buff, ion_t *ion) {
         
         line_num += 1;
         if(line_num > max_line_cnt) {
+            ion->ndata=data_idx;
             return 0;
         }
     }
@@ -2254,7 +2302,9 @@ static int readrnx4navb(FILE *fp, const char *opt, double ver, int sys,
         
         if (data_type == NAV_STO) {
             *type = 5;
-            sta = 0;
+            memset(sto,0,sizeof(sto_t));
+            sto->hdr = tmp_hdr;
+            sta = readstobody(fp,buff,sto);
         }
         else if(data_type == NAV_ION) {
             *type = 4;
@@ -2263,6 +2313,7 @@ static int readrnx4navb(FILE *fp, const char *opt, double ver, int sys,
         }
         else if (data_type == NAV_EOP) {
             *type = 3;
+            memset(eop,0,sizeof(eop_t));
             eop->hdr = tmp_hdr;
             sta = readeopbody(fp, buff, eop);
         }
@@ -2277,14 +2328,14 @@ static int readrnx4navb(FILE *fp, const char *opt, double ver, int sys,
                 seph->hdr = tmp_hdr;
         }
         
-        if(((data_type == NAV_ION || data_type == NAV_EOP) && sta == 1)
+        if(((data_type == NAV_ION || data_type == NAV_EOP || data_type == NAV_STO) && sta == 1)
             ||((data_type == NAV_EPH) && sta == 2))
         {
             getNewLine = 1;
             continue;
         }
         
-        if(data_type == NAV_ION || data_type == NAV_EOP) return !sta;
+        if(data_type == NAV_ION || data_type == NAV_EOP || data_type == NAV_STO) return !sta;
         else if(data_type == NAV_EPH) return sta;
     }
     
@@ -2432,7 +2483,7 @@ static int add_sto(nav_t *nav, const sto_t *sto)
         }
         nav->sto=nav_sto;
     }
-    nav->sto[nav->ng++]=*sto;
+    nav->sto[nav->nsto++]=*sto;
     return 1;
 }
 static int add_seph(nav_t *nav, const seph_t *seph)
@@ -2484,7 +2535,7 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
                 if (!stat) return 0;
             }
         }
-        return nav->n>0||nav->ng>0||nav->ns>0;
+        return nav->n>0||nav->ng>0||nav->ns>0||nav->nion>0||nav->neop>0||nav->nsto>0;
     } else {
         /* read rinex navigation data body */
         while ((stat=readrnxnavb(fp,opt,ver,sys,&type,&eph,&geph,&seph))>=0) {

@@ -206,12 +206,15 @@ typedef struct {
     int sys;
     int prn;
     int msg_type;
+    char subtype[5];
 } nav_data_hdr_t;
 ```
 
 该 header 会附加到 `eph_t`、`geph_t`、`seph_t`、`ion_t`、`sto_t`、`eop_t` 中。
 
 这非常重要，因为 RINEX 4 同一颗卫星可以有不同的 navigation message type，同一数组槽位在不同 message type 下可能具有不同物理意义。
+
+`eph_t.sva` 遵循编译时 `URA2URAI` 约定：`URA2URAI=0` 时保留 RINEX 中以米表示的精度值，`URA2URAI=1` 时转换为 RTKLIB 的 URA index。
 
 ### 7.2 支持识别的 record type
 
@@ -243,6 +246,10 @@ CNV2
 CNV3
 IFNV
 CNVX
+L1NV
+L1OC
+L3OC
+LXOC
 ```
 
 是否能够“识别 message type”与“该 message 的所有参数均被完整解释”是两件事；使用新消息时仍应检查对应 decoder。
@@ -412,6 +419,9 @@ typedef struct {
     gtime_t trans_time;
     double alpha[9];
     double region;
+    double data[32];
+    unsigned char present[32];
+    int ndata;
 } ion_t;
 ```
 
@@ -438,6 +448,7 @@ typedef struct {
     double x, dx, dx2;
     double y, dy, dy2;
     double ut, dut, dut2;
+    unsigned char present[10];
 } eop_t;
 ```
 
@@ -454,10 +465,16 @@ nav.neop
 typedef struct {
     nav_data_hdr_t hdr;
     gtime_t ref_time;
+    char corr_type[5];
+    char corr_id[19];
+    double trans_time, a0, a1, a2;
+    unsigned char present[4];
 } sto_t;
 ```
 
-当前实现的 STO 支持尚不完整，详见“已知实现注意事项”。
+STO body 的 epoch、correction type/identifier、transmission time 及三阶
+polynomial coefficients 现在均保存到 `nav.sto[]`，并由 `present[]` 保留
+固定宽度字段的空白状态。
 
 ## 11. Header 中的传统导航参数
 
@@ -544,7 +561,7 @@ value == 0.0
 
 如果业务需要严格区分，应增加 presence/valid flag。
 
-### 13.3 `uniqnav()` 未把 RINEX 4 `msg_type` 作为唯一键
+### 13.3 `uniqnav()` 的 RINEX 4 `msg_type` 唯一性
 
 当前 `uniqeph()` 的去重主要依据：
 
@@ -554,7 +571,7 @@ satellite + IODE
 
 而 RINEX 4 同一颗卫星可以同时存在 LNAV/CNAV/CNV2 或 D1/D2/CNV1/CNV2/CNV3 等不同消息。
 
-如果业务需要完整保留各 message type，应在调用 `uniqnav()` 前确认去重逻辑是否满足需求，建议后续将 `hdr.msg_type` 纳入 RINEX 4 星历唯一键。
+当前实现已经将 `hdr.msg_type` 纳入 RINEX 4 星历唯一键，以保留同一卫星的不同导航消息类型。
 
 ### 13.4 GPS CNAV/CNV2 的公共字段需要谨慎使用
 
@@ -562,19 +579,13 @@ satellite + IODE
 
 因此对 CNAV/CNV2，不能默认 `iode/iodc/code/flag/fit` 等所有传统成员都与 LNAV 具有完全相同的语义。使用新导航消息时应优先依据 `hdr.msg_type` 和对应专用字段。
 
-### 13.5 STO 当前实现不完整
+### 13.5 STO、EOP 和 ION 的字段存在性
 
-当前 `readstobody()` 中 STO body 的字段解析仍是占位逻辑，`sto_t` 也只包含 `hdr` 和 `ref_time`。
-
-此外当前 `add_sto()` 的实际代码为：
-
-```c
-nav->sto[nav->ng++]=*sto;
-```
-
-而不是使用 `nav->nsto++`。这会导致 STO 计数/索引与 `nav.ng`（GLONASS ephemeris count）耦合，属于需要修复的实现问题。
-
-在修复前，不应依赖 `nav.sto[]/nav.nsto` 做完整 STO 数据处理。
+STO、EOP 和 ION 的 decoder 现在按固定宽度记录各字段的 presence 状态；
+STO 使用 `nav.nsto` 独立计数，EOP 的 Y 分量从其规范中的备用字段之后读取，
+而 BDS EOP transmission time 按 BDT 周转换后存储为 RTKLIB 的 GPST 时间。
+空白数值字段仍不会被静默解释为“原始字段存在的 0”，调用方应检查对应
+`present[]`。
 
 ### 13.6 “已经存储”不等于“定位模型已经使用”
 
@@ -663,8 +674,41 @@ RINEX NAV record
 
 ## 16. 参考
 
-- RINEX 4.01 specification
+- RINEX 4.02 specification
 - RTKLIB `src/rinex.c`
 - RTKLIB `src/rtklib.h`
 
 如修改 RINEX 4 NAV decoder、`eph_t` 的 TGD/ISC 槽位、`nav_data_hdr_t` 或 `uniqnav()`，应同步更新本文档。
+
+## 17. Issue #1 NAV 字段级验证
+
+仓库中的 `tests/rinex_nav_compare/` 提供三层结果：
+
+1. `rtklib_nav_dump.c` 只通过公开 `readrnx()` API 导出 RTKLIB 存储结果；
+2. `run_compare.py` 使用固定宽度 raw reader 建立可追溯的字段库存；
+3. GeoRinex 在可支持的文件上作为独立 canonical exporter，按系统、PRN、
+   epoch 和重复序号导出变量值。
+
+可复现命令（从仓库父目录执行；GeoRinex 建议使用隔离 Python 环境）：
+
+```text
+/tmp/rtklib_nav_compare_venv/bin/python \
+  RTKLIB/tests/rinex_nav_compare/run_compare.py \
+  --fixtures nav_data --include-repo-test-nav \
+  --rtklib-dump /tmp/rtklib_nav_dump
+```
+
+输出写入 `artifacts/rinex_nav_compare/`：
+
+- `field_inventory.csv`：每个 raw 字段、RTKLIB 映射、GeoRinex 映射、原始文本、
+  presence 和终态分类；
+- `differences.csv`：所有非 `MATCH` 字段；
+- `summary.json`：版本、系统、消息类型、分类计数、工具版本和 GeoRinex 失败原因；
+- `report.md`：简要复现报告。
+
+终态分类只允许 `MATCH`、`VALUE_MISMATCH`、`PRESENCE_MISMATCH`、
+`COVERAGE_GAP_RTKLIB`、`COVERAGE_GAP_GEORINEX`、`SEMANTIC_MAPPING_GAP` 和
+`REFERENCE_UNRESOLVED`；未映射或不支持的字段不能计入通过数量。
+
+数值比较采用：整数/索引字段精确比较，时间字段绝对误差 `1e-6`，其余
+浮点字段 `abs <= 1e-11 + 1e-9 * max(abs(a), abs(b))`。

@@ -110,7 +110,7 @@
 *                           chanage api crc32() -> rtk_crc32()
 *                           chanage api crc24q() -> rtk_crc24q()
 *-----------------------------------------------------------------------------*/
-#define _POSIX_C_SOURCE 199309
+#define _POSIX_C_SOURCE 200809L
 #include <stdarg.h>
 #include <ctype.h>
 #ifndef WIN32
@@ -531,6 +531,10 @@ extern void navmsgstr(int type, char *str)
         case NAV_D1D2: strcpy(str, "D1D2"); break;
         case NAV_IFNV: strcpy(str, "IFNV"); break;
         case NAV_CNVX: strcpy(str, "CNVX"); break;
+        case NAV_L1NV: strcpy(str, "L1NV"); break;
+        case NAV_L1OC: strcpy(str, "L1OC"); break;
+        case NAV_L3OC: strcpy(str, "L3OC"); break;
+        case NAV_LXOC: strcpy(str, "LXOC"); break;
         
         default: break;
     }
@@ -2524,7 +2528,8 @@ static void uniqeph(nav_t *nav)
     
     for (i=1,j=0;i<nav->n;i++) {
         if (nav->eph[i].sat!=nav->eph[j].sat||
-            nav->eph[i].iode!=nav->eph[j].iode) {
+            nav->eph[i].iode!=nav->eph[j].iode||
+            nav->eph[i].hdr.msg_type!=nav->eph[j].hdr.msg_type) {
             nav->eph[++j]=nav->eph[i];
         }
     }
@@ -2807,6 +2812,9 @@ extern void freenav(nav_t *nav, int opt)
     if (opt&0x10) {free(nav->pclk); nav->pclk=NULL; nav->nc=nav->ncmax=0;}
     if (opt&0x20) {free(nav->alm ); nav->alm =NULL; nav->na=nav->namax=0;}
     if (opt&0x40) {free(nav->tec ); nav->tec =NULL; nav->nt=nav->ntmax=0;}
+    if (opt&0x80) {free(nav->ion ); nav->ion =NULL; nav->nion=nav->nionmax=0;}
+    if (opt&0x100) {free(nav->eop ); nav->eop =NULL; nav->neop=nav->neopmax=0;}
+    if (opt&0x200) {free(nav->sto ); nav->sto =NULL; nav->nsto=nav->nstomax=0;}
 }
 /* debug rtktrace functions -----------------------------------------------------*/
 #ifdef TRACE
@@ -3911,4 +3919,3 @@ extern int input_lexr(raw_t *raw, unsigned char data) {return 0;}
 extern int input_lexrf(raw_t *raw, FILE *fp) {return 0;}
 extern int gen_lexr(const char *msg, unsigned char *buff) {return 0;}
 #endif /* EXTLEX */
-

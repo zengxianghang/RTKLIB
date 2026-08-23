@@ -133,6 +133,10 @@ extern "C" {
 #define NAV_D1D2 0x800
 #define NAV_IFNV 0x1000
 #define NAV_CNVX 0x2000
+#define NAV_L1NV 0x4000
+#define NAV_L1OC 0x8000
+#define NAV_L3OC 0x10000
+#define NAV_LXOC 0x20000
 
 #define NAV_EPH 0x01
 #define NAV_STO 0x02
@@ -527,6 +531,7 @@ typedef struct {
     int sys;
     int prn;
     int msg_type;
+    char subtype[5];
 } nav_data_hdr_t;
 
 
@@ -862,13 +867,22 @@ typedef struct { //see rinex4.01, table A32
     gtime_t trans_time;
     double alpha[9]; //klo 8 para, gal 3 para, bdgim 9 para
     double region;
+    double data[32];
+    unsigned char present[32];
+    int ndata;
 } ion_t;
 
 
 typedef struct { //see rinex4.01, table A30
     nav_data_hdr_t hdr;
     gtime_t ref_time;
-    
+    char corr_type[5];
+    char corr_id[19];
+    double trans_time;
+    double a0;
+    double a1;
+    double a2;
+    unsigned char present[4];
 } sto_t;
 
 typedef struct { //see rinex4.01, table A31
@@ -884,6 +898,7 @@ typedef struct { //see rinex4.01, table A31
     double ut;
     double dut;
     double dut2;
+    unsigned char present[10];
 }eop_t;
 
 typedef struct {        /* QZSS LEX ionosphere correction type */
