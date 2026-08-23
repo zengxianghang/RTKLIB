@@ -1043,7 +1043,7 @@ static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
     
     sys=satsys(sat,NULL);
     
-    if (!(sys&(SYS_GPS|SYS_GAL|SYS_QZS|SYS_CMP))) {
+    if (!(sys&(SYS_GPS|SYS_GAL|SYS_QZS|SYS_CMP|SYS_IRN))) {
         rtktrace(2,"ephemeris error: invalid satellite sat=%2d\n",sat);
         return 0;
     }
@@ -1061,7 +1061,7 @@ static int decode_eph(double ver, int sat, gtime_t toc, const double *data,
     eph->idot=data[19]; eph->crc=data[16]; eph->crs =data[ 4]; eph->cuc =data[ 7];
     eph->cus =data[ 9]; eph->cic=data[12]; eph->cis =data[14];
     
-    if (sys==SYS_GPS||sys==SYS_QZS) {
+    if (sys==SYS_GPS||sys==SYS_QZS||sys==SYS_IRN) {
         eph->iode=(int)data[ 3];      /* IODE */
         eph->iodc=(int)data[26];      /* IODC */
         eph->toes=     data[11];      /* toe (s) in gps week */

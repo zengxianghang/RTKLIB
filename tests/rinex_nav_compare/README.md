@@ -51,23 +51,32 @@ RTKLIB/tests/rinex_nav_compare/nav_solutions_ref/target/release/nav_solutions_re
   nav_data/BRDM00DLR_S_20260600000_01D_MN.rnx /tmp/nav_ref_brdm.jsonl
 ```
 
-The comparison creates `summary.json`, `canonical_fields.jsonl`, and
-`georinex_fields.jsonl`. Time-scale and unit normalization is explicit:
+The comparison creates `summary.json`, `canonical_fields.jsonl`,
+`georinex_fields.jsonl`, and `unmatched_records.csv`. The CSV records every
+raw/RTKLIB record-key gap with system, PRN, record/message type, week, toe,
+toc, satellite, reason, and source location. Time-scale and unit
+normalization is explicit:
 BDT/UTC epochs are aligned to the RINEX time scale, QZSS/SBAS internal PRNs
 are mapped back to RINEX PRNs, and GeoRinex metre-based GLONASS/SBAS state
 vectors are converted to RTKLIB's kilometre representation.
 
-The terminal result must be interpreted by class, not as a single pass/fail:
+The terminal result must be interpreted by class, not as a single pass/fail.
+The canonical field status set is exactly `MATCH`, `VALUE_MISMATCH`,
+`PRESENCE_MISMATCH`, `COVERAGE_GAP_RTKLIB`, `COVERAGE_GAP_GEORINEX`,
+`SEMANTIC_MAPPING_GAP`, and `REFERENCE_UNRESOLVED`:
 
 - `MATCH` means raw, RTKLIB, and the reference agree numerically.
-- `REFERENCE_DUPLICATE_COLLAPSE` records the reference library's one-value
-  `BTreeMap<NavKey, NavFrame>` representation when RINEX contains duplicate
-  `(satellite, epoch)` records.
-- `SEMANTIC_REPRESENTATION_GAP` covers typed health/source flags that are
-  represented as enums by the reference rather than raw numeric codes.
-- Presence, semantic-mapping, and coverage gaps remain visible and are never
-  treated as numeric matches. In particular, the pinned reference documents
-  that GLONASS, SBAS, and IRNSS navigation support is limited.
+- `REFERENCE_UNRESOLVED` retains duplicate-collapse, typed-value, and
+  unsupported-reference cases; they are never treated as numeric matches.
+- Presence, semantic-mapping, and coverage gaps remain visible. In
+  particular, the pinned reference documents that GLONASS, SBAS, and IRNSS
+  navigation support is limited.
+
+Use `--require-closed-loop` for the representative gate. It requires
+`unmatched_record_count == 0`, `unclassified_field_count == 0`, and
+`value_mismatch_count == 0`; reference limitations remain explicit as
+`REFERENCE_UNRESOLVED` and `reference_unmatched_record_count` rather than
+being silently discarded.
 
 Only after Phase A has no unexplained numeric mismatch should the same command
 be expanded to the remaining RINEX 3, RINEX 2, and RINEX 4 corpus. RTKLIB is
@@ -75,33 +84,39 @@ not changed merely to follow one library's representation; any parser change
 must first be adjudicated against the raw fixed-width fields and the RINEX
 specification.
 
-## Phase B expansion status (2026-08-23)
+## Closed-loop result and Phase B expansion status (2026-08-23)
 
-The Phase A gate passed on
-`nav_data/BRDM00DLR_S_20260600000_01D_MN.rnx`: 18,647 raw records reduced to
-15,692 raw keys; 15,454 keys intersected with the pinned reference. The
-three-way comparison had no numeric `VALUE_MISMATCH`; the remaining records
-were explicitly classified as duplicate collapse, typed-value representation,
-presence, semantic-mapping, or coverage gaps. GeoRinex also had no numeric
-value mismatch on this file.
+The four-way gate passed on
+`nav_data/BRDM00DLR_S_20260600000_01D_MN.rnx`: 18,647 raw records, 15,692
+raw keys, and exact raw/RTKLIB key closure. The gate reported
+`unmatched_record_count=0`, `unclassified_field_count=0`, and
+`value_mismatch_count=0`. GeoRinex loaded the file and had no numeric value
+mismatch. The 238 IRNSS keys absent from the pinned Rust reference and its
+typed/duplicate representations remain explicitly classified as
+`REFERENCE_UNRESOLVED`.
 
-The same exporter and comparator were then run on all 18 local files (six
+The raw/spec adjudication also fixed three RTKLIB coverage/alignment gaps
+observed in the corpus: legacy IRNSS NAV decoding through I14, GLONASS slots
+through R31, and QZSS RINEX PRNs J08/J09 (internal PRNs 200/201). No change
+was made to make RTKLIB agree with an independent reference value.
+
+The same exporter and comparator were previously run on all 18 local files (six
 BRD400 RINEX 4.02, six BRDC RINEX 3.04, and six BRDM RINEX 3.04). The pinned
 Rust parser successfully parsed all 18 files. This expansion is exploratory,
-not a green Phase B gate:
+not a green GeoRinex/reference Phase B gate:
 
 - GeoRinex loaded the six BRDM files, rejected the six RINEX 4.02 files as an
   unknown RINEX 4.02 NAV layout, and rejected the six BRDC files because of
   an IRNSS field-length limitation.
 - RINEX 4 message-specific CNAV/CNV, D1/D2, INAV/FNAV, FDMA, STO, and EOP
-  mappings still need raw/spec adjudication. For example, the pinned parser's
-  Galileo INAV/FNAV output shifts health/BGD slots relative to the raw
-  fixed-width fields; RTKLIB was not changed to follow that output.
+  reference mappings still need independent review. For example, the pinned
+  parser's Galileo INAV/FNAV output shifts health/BGD slots relative to the
+  raw fixed-width fields; RTKLIB was not changed to follow that output.
 - The BRDC comparison also exposes legacy Galileo data-source, transmission
   time, and clock-value differences that require a separate spec/code review;
-  they are retained as `VALUE_MISMATCH` evidence rather than silently
-  normalized away.
+  they remain traceable as reference-side `REFERENCE_UNRESOLVED` evidence
+  when raw and RTKLIB agree.
 
 The Phase B artifacts are intentionally kept outside the repository because
 the JSONL field inventory is large. Re-running the commands above preserves
-the per-field source location and all three statuses for review.
+the per-field source location and all canonical statuses for review.

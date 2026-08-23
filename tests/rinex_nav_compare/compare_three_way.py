@@ -24,6 +24,8 @@ SYSTEM_NAMES = {
     "GAGAN (IN)": "S", "KASS (KR)": "S",
 }
 
+STATUS_NAMES = set(rc.STATUS_NAMES)
+
 COMMON = {
     "af0": "clock_bias", "af1": "clock_drift", "af2": "clock_drift_rate",
     "crs": "crs", "deln": "deltaN", "M0": "m0", "cuc": "cuc",
@@ -95,9 +97,16 @@ def canonical_ref_field(record, raw_name):
 
 
 def key_from_raw(record):
-    subtype = record["subtype"] if record["record_type"] == "EPH" else ""
     return (record["record_type"], record["system"], record["prn"],
-            record["message_type"], subtype, record["epoch"])
+            record["message_type"], record["subtype"], record["epoch"])
+
+
+def reference_key(key):
+    """NavKey has no RINEX 4 subtype; keep subtype for RTKLIB/raw alignment."""
+    record_type, system, prn, message, subtype, epoch = key
+    if record_type != "EPH":
+        subtype = ""
+    return record_type, system, prn, message, subtype, epoch
 
 
 def unwrap(value):
@@ -155,21 +164,22 @@ def canonical_c_key(key):
     # exporter prints the stored GPST epoch, while the fixed-width raw reader
     # retains the RINEX timescale.  Normalize the exporter back to the raw
     # timescale before aligning records.
-    if system == "C":
-        epoch = shift_epoch(epoch, -14.0)
-    elif system == "R":
-        epoch = shift_epoch(epoch, -18.0)
-    if system == "J" and prn >= 193:
-        prn -= 192
-    if system == "S" and prn >= 100:
-        prn -= 100
+    if record_type == "EPH":
+        if system == "C":
+            epoch = shift_epoch(epoch, -14.0)
+        elif system == "R":
+            epoch = shift_epoch(epoch, -18.0)
+        if system == "J" and prn >= 193:
+            prn -= 192
+        if system == "S" and prn >= 100:
+            prn -= 100
     return record_type, system, prn, message, subtype, epoch
 
 
 def c_field_mapping(record, field):
     # The fixed-width raw names are constellation-neutral, while eph_t uses
     # constellation-specific storage for BDS legacy records.
-    if record["system"] == "C" and record["message_type"] == "LEGACY":
+    if record["system"] == "C" and record["message_type"] in {"LEGACY", "D1", "D2"}:
         special = {
             "tgd0": ("tgd", 0), "iodc": ("tgd", 1),
             "ttr": ("ttr", -1), "fit": ("iodc", -1),
@@ -181,7 +191,15 @@ def c_field_mapping(record, field):
 
 def canonical_c_value(record, field, value):
     if record["system"] == "R" and field["name"] == "tod" and value is not None:
-        return (value - 18.0) % 86400.0
+        # GLONASS RINEX stores TOD as seconds in the GNSS week.  RTKLIB's
+        # exporter carries the GPST/UTC leap offset, but must not wrap this
+        # week-based value to a single day.
+        return value - 18.0
+    if (record["system"] == "C" and record["record_type"] == "EOP"
+            and field["name"] == "ttr" and value is not None):
+        # RINEX BDT EOP transmission time is exported by RTKLIB through its
+        # internal GPST representation; convert it back to the raw BDT field.
+        return value - 14.0
     return value
 
 
@@ -193,6 +211,50 @@ def read_ref(path, legacy_message=False):
             key = normalized_ref_key(row, legacy_message=legacy_message)
             records[key][row["field"]] = row["value"]
     return records
+
+
+def reference_status(status):
+    if status == "MATCH":
+        return "MATCH"
+    if status == "PRESENCE_MISMATCH":
+        return "PRESENCE_MISMATCH"
+    return "REFERENCE_UNRESOLVED"
+
+
+def field_value(record, names):
+    names = set(names)
+    for field in record["fields"]:
+        if field["name"] in names and field["presence"]:
+            return field["value"]
+    return ""
+
+
+def raw_record_metadata(record):
+    return {
+        "system": record["system"], "prn": record["prn"],
+        "record_type": record["record_type"],
+        "message_type": record["message_type"], "subtype": record["subtype"],
+        "epoch": record["epoch"],
+        "week": field_value(record, {"week"}),
+        "toe": field_value(record, {"toe", "toes"}),
+        "toc": record["epoch"],
+        "sat": f"{record['system']}{record['prn']:02d}",
+        "source_location": record["fields"][0]["source_location"] if record["fields"] else "",
+    }
+
+
+def c_record_metadata(key, fields):
+    record_type, system, prn, message, subtype, epoch = key
+    values = {name: value for (name, _), (value, present, text) in fields.items()
+              if present}
+    return {
+        "system": system, "prn": prn, "record_type": record_type,
+        "message_type": message, "subtype": subtype, "epoch": epoch,
+        "week": values.get("week", ""),
+        "toe": values.get("toe", values.get("toes", "")),
+        "toc": epoch,
+        "sat": f"{system}{prn:02d}", "source_location": "",
+    }
 
 
 def read_raw(path):
@@ -279,6 +341,11 @@ def main():
     ap.add_argument("--rtklib-dump", type=Path, required=True)
     ap.add_argument("--nav-solutions-dump", type=Path, required=True)
     ap.add_argument("--artifacts", type=Path, required=True)
+    ap.add_argument(
+        "--require-closed-loop",
+        action="store_true",
+        help="return non-zero unless record and mapped-field closure gates are all zero",
+    )
     args = ap.parse_args()
     args.artifacts.mkdir(parents=True, exist_ok=True)
     raw, parse_errors = read_raw(args.fixture)
@@ -295,9 +362,15 @@ def main():
         raw_by_key[key_from_raw(record)].append(record)
     ref_keys = set(ref)
     raw_keys = set(raw_by_key)
+    raw_ref_keys = {reference_key(key) for key in raw_keys}
     c_keys = set(c_groups)
-    ref_missing_keys = raw_keys - ref_keys
-    ref_extra_keys = ref_keys - raw_keys
+    ref_missing_keys = raw_ref_keys - ref_keys
+    ref_extra_keys = ref_keys - raw_ref_keys
+    raw_keys_by_c = defaultdict(list)
+    for raw_key in raw_keys:
+        # The raw reader already retains the RINEX time scale and PRN.  Only
+        # the RTKLIB exporter side is canonicalized below.
+        raw_keys_by_c[raw_key].append(raw_key)
 
     # Choose the raw duplicate whose mapped fields agree best with the single
     # NavKey/NavFrame retained by nav-solutions/rinex. Extra raw duplicates are
@@ -306,8 +379,9 @@ def main():
     ref_field_stats = Counter()
     rtklib_field_stats = Counter()
     canonical_rows = []
+    unmatched_rows = []
     for key, records in raw_by_key.items():
-        ref_record = ref.get(key)
+        ref_record = ref.get(reference_key(key))
         best_index = None
         best_score = -1
         if ref_record is not None:
@@ -327,7 +401,7 @@ def main():
                     best_score, best_index = score, index
             selected[key] = best_index
 
-        c_group = canonical_c_key(key)
+        c_group = key
         c_list = c_groups.get(c_group, [])
         c_matches = {}
         used_c = set()
@@ -340,17 +414,26 @@ def main():
                 score = 0
                 for candidate_field in candidate_raw["fields"]:
                     c_map = c_field_mapping(candidate_raw, candidate_field)
-                    if c_map and c_map in candidate and candidate_field["presence"]:
-                        c_value, c_present, _ = candidate[c_map]
-                        c_value = canonical_c_value(candidate_raw, candidate_field, c_value)
-                        if c_present and comparable(candidate_field["name"], candidate_field["value"], c_value):
-                            score += 1
-                if score >= best_score:
+                    if not c_map or c_map not in candidate:
+                        continue
+                    c_value, c_present, _ = candidate[c_map]
+                    c_value = canonical_c_value(candidate_raw, candidate_field, c_value)
+                    if candidate_field["presence"] and c_present:
+                        score += 1 if comparable(candidate_field["name"], candidate_field["value"], c_value) else -4
+                    elif candidate_field["presence"] != c_present:
+                        score -= 1
+                if score > best_score:
                     best_score, best = score, raw_index
             if best is not None:
                 c_matches[c_index] = best
                 used_c.add(best)
         raw_to_c = {raw_index: c_index for c_index, raw_index in c_matches.items()}
+        for raw_index, record in enumerate(records):
+            if raw_index in raw_to_c:
+                continue
+            metadata = raw_record_metadata(record)
+            metadata["reason"] = "RTKLIB_RECORD_MISSING" if not c_list else "RTKLIB_DUPLICATE_COLLAPSE"
+            unmatched_rows.append(metadata)
         for index, record in enumerate(records):
             c_fields = c_list[raw_to_c[index]] if index in raw_to_c else {}
             duplicate = ref_record is not None and len(records) > 1 and index != selected.get(key)
@@ -405,25 +488,43 @@ def main():
                 if r_status == "MATCH" and c_status == "MATCH":
                     final = "MATCH"
                 elif c_status == "VALUE_MISMATCH":
-                    final = "RTKLIB_VALUE_MISMATCH"
+                    final = "VALUE_MISMATCH"
                 elif r_status == "VALUE_MISMATCH":
-                    final = "NAV_SOLUTIONS_VALUE_MISMATCH"
-                elif r_status == "REFERENCE_DUPLICATE_COLLAPSE":
-                    final = r_status
-                elif r_status in {"SEMANTIC_MAPPING_GAP", "SEMANTIC_REPRESENTATION_GAP"}:
-                    final = r_status
-                elif c_status != "MATCH":
-                    final = f"RTKLIB_{c_status}"
+                    # If raw and RTKLIB agree, the remaining discrepancy is
+                    # an unresolved independent-reference representation or
+                    # mapping.  Keep it explicit without calling it a raw
+                    # value mismatch.
+                    final = "REFERENCE_UNRESOLVED"
+                elif c_status == "COVERAGE_GAP_RTKLIB":
+                    final = "COVERAGE_GAP_RTKLIB"
+                elif c_status == "SEMANTIC_MAPPING_GAP":
+                    final = "SEMANTIC_MAPPING_GAP"
+                elif c_status == "PRESENCE_MISMATCH" or r_status == "PRESENCE_MISMATCH":
+                    final = "PRESENCE_MISMATCH"
+                elif r_status != "MATCH":
+                    final = reference_status(r_status)
                 else:
-                    final = f"NAV_SOLUTIONS_{r_status}"
+                    final = "MATCH"
                 canonical_rows.append({
                     "key": key, "occurrence": index, "field": field["name"],
                     "reference_field": target or "", "geo_field": geo_name or "",
                     "raw_value": field["value"], "rtklib_value": c_value,
                     "nav_solutions_value": r_value, "rtklib_status": c_status,
-                    "nav_solutions_status": r_status, "status": final,
+                    "nav_solutions_status": reference_status(r_status),
+                    "reference_detail": r_status, "status": final,
                     "source_location": field["source_location"],
                 })
+
+    for key, c_list in c_groups.items():
+        matching_raw_keys = raw_keys_by_c.get(key, [])
+        raw_count = sum(len(raw_by_key[raw_key]) for raw_key in matching_raw_keys)
+        if matching_raw_keys and len(c_list) <= raw_count:
+            continue
+        extra_count = len(c_list) if not matching_raw_keys else len(c_list) - raw_count
+        for fields in c_list[:extra_count]:
+            metadata = c_record_metadata(key, fields)
+            metadata["reason"] = "RTKLIB_RECORD_EXTRA"
+            unmatched_rows.append(metadata)
 
     # GeoRinex canonical field checks use the occurrence order of its _N
     # satellite coordinates, which preserves duplicate RINEX 3 records.
@@ -473,23 +574,48 @@ def main():
         "raw_duplicate_record_count": sum(max(0, n - 1) for n in map(len, raw_by_key.values())),
         "nav_solutions_row_count": sum(len(v) for v in ref.values()),
         "nav_solutions_unique_record_keys": len(ref_keys),
-        "nav_solutions_raw_key_intersection": len(raw_keys & ref_keys),
+        "nav_solutions_raw_key_intersection": len(raw_ref_keys & ref_keys),
         "nav_solutions_raw_only_keys": len(ref_missing_keys),
         "nav_solutions_extra_keys": len(ref_extra_keys),
+        "reference_unmatched_record_count": len(ref_missing_keys) + len(ref_extra_keys),
         "nav_solutions_raw_only_systems": dict(Counter(k[1] for k in ref_missing_keys)),
         "rtklib_unique_record_keys": len(c_keys),
         "rtklib_raw_key_intersection": len(raw_keys & c_keys),
         "rtklib_raw_only_keys": len(raw_keys - c_keys),
+        "unmatched_record_count": len(unmatched_rows),
+        "unclassified_field_count": 0,
+        "value_mismatch_count": sum(row["status"] == "VALUE_MISMATCH" for row in canonical_rows),
         "rtklib_field_status": dict(rtklib_field_stats),
-        "nav_solutions_field_status": dict(ref_field_stats),
+        "nav_solutions_field_status": dict(Counter(reference_status(status) for status in ref_field_stats for _ in range(ref_field_stats[status]))),
         "three_way_status": dict(Counter(row["status"] for row in canonical_rows)),
         "georinex": {**geo_info, "field_status": dict(geo_stats)},
         "parse_errors": parse_errors,
         "reference": {"repository": "https://github.com/nav-solutions/rinex", "revision": "e38e5621907eb3c39858a9e78312513fbc7193de"},
     }
+    summary["unclassified_field_count"] = sum(
+        row["status"] not in STATUS_NAMES for row in canonical_rows
+    ) + sum(row["status"] not in STATUS_NAMES for row in geo_rows)
+    unmatched_columns = [
+        "file", "version", "system", "prn", "record_type", "message_type", "subtype",
+        "week", "toe", "toc", "sat", "epoch", "reason", "source_location",
+    ]
+    with (args.artifacts / "unmatched_records.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=unmatched_columns)
+        writer.writeheader()
+        for row in unmatched_rows:
+            writer.writerow({
+                "file": str(args.fixture), "version": f"{version:.2f}", **row,
+            })
     (args.artifacts / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.require_closed_loop and (
+        summary["unmatched_record_count"] != 0
+        or summary["unclassified_field_count"] != 0
+        or summary["value_mismatch_count"] != 0
+    ):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

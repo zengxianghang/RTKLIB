@@ -160,7 +160,12 @@ def bds_cnav_names(msg, count):
         "sisai2", "sisai3",
     ]
     if msg == "CNV1":
-        names += ["isc0"]
+        # CNV1 reserves data[28]; the two TGD fields start at data[29].
+        names += ["isc0", "spare_28"]
+    elif msg == "CNV3":
+        # CNV3 has no ISC field in this position.
+        names += ["sva", "svh", "int_flag", "tgd0", "ttr"]
+        return names + [f"reserved_{i}" for i in range(len(names), count)]
     else:
         names += ["spare_27", "isc0"]
     if msg in {"CNV1", "CNV2"}:

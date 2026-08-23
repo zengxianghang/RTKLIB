@@ -163,7 +163,7 @@ extern "C" {
 
 #ifdef ENAGLO
 #define MINPRNGLO   1                   /* min satellite slot number of GLONASS */
-#define MAXPRNGLO   26                  /* max satellite slot number of GLONASS */
+#define MAXPRNGLO   31                  /* max satellite slot number observed in RINEX NAV */
 #define NSATGLO     (MAXPRNGLO-MINPRNGLO+1) /* number of GLONASS satellites */
 #define NSYSGLO     1
 #else
@@ -185,7 +185,7 @@ extern "C" {
 #endif
 #ifdef ENAQZS
 #define MINPRNQZS   193                 /* min satellite PRN number of QZSS */
-#define MAXPRNQZS   199                 /* max satellite PRN number of QZSS */
+#define MAXPRNQZS   201                 /* max satellite PRN number of QZSS */
 #define MINPRNQZS_S 183                 /* min satellite PRN number of QZSS SAIF */
 #define MAXPRNQZS_S 189                 /* max satellite PRN number of QZSS SAIF */
 #define NSATQZS     (MAXPRNQZS-MINPRNQZS+1) /* number of QZSS satellites */
@@ -222,7 +222,7 @@ extern "C" {
 #endif
 #ifdef ENAIRN
 #define MINPRNIRN   1                   /* min satellite sat number of IRN */
-#define MAXPRNIRN   10                  /* max satellite sat number of IRN */
+#define MAXPRNIRN   14                  /* max satellite sat number of IRN */
 #define NSATIRN     (MAXPRNIRN-MINPRNIRN+1) /* number of IRN satellites */
 #define NSYSIRN     1
 #else
