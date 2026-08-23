@@ -701,14 +701,28 @@ RINEX NAV record
 输出写入 `artifacts/rinex_nav_compare/`：
 
 - `field_inventory.csv`：每个 raw 字段、RTKLIB 映射、GeoRinex 映射、原始文本、
-  presence 和终态分类；
+  presence、nav-solutions/rinex 映射和值以及终态分类；每个 raw 字段一行；
 - `differences.csv`：所有非 `MATCH` 字段；
+- `unmatched_records.csv`：raw↔RTKLIB 的记录键缺口，包含 `reason` 和
+  `mismatch_reason`；`reference_unmatched_records.csv` 单独记录
+  nav-solutions/rinex 的记录覆盖缺口；
 - `summary.json`：版本、系统、消息类型、分类计数、工具版本和 GeoRinex 失败原因；
 - `report.md`：简要复现报告。
 
 终态分类只允许 `MATCH`、`VALUE_MISMATCH`、`PRESENCE_MISMATCH`、
 `COVERAGE_GAP_RTKLIB`、`COVERAGE_GAP_GEORINEX`、`SEMANTIC_MAPPING_GAP` 和
-`REFERENCE_UNRESOLVED`；未映射或不支持的字段不能计入通过数量。
+`COVERAGE_GAP_NAV_SOLUTIONS_RINEX`、`REFERENCE_UNRESOLVED`；未映射或不支持的
+字段不能计入通过数量。`REFERENCE_UNRESOLVED` 仅用于已有对应字段但值/表示
+仍需 raw/spec 裁决的情况。
+
+RINEX 4 专项闭环还会在 `field_inventory.csv` 中保留每个消息类型的
+TGD/BGD/ISC 语义：GPS/QZSS CNAV/CNV2 的 `iscL1Ca`、`iscL2C`、`iscL5I5`、
+`iscL5Q5`、`iscL1Cd`、`iscL1Cp`，Galileo 的两个 BGD 字段，以及 BeiDou
+CNV1/CNV2/CNV3 的 `iscB1Cd`/`iscB2ad` 和三组 TGD 字段。2026-08-23 的
+BRD400 RINEX 4.02 专项运行覆盖 584,803 个 raw 字段，raw↔RTKLIB
+`unmatched_record_count=0`、`unclassified_field_count=0`、
+`value_mismatch_count=0`；GeoRinex 对该 RINEX 4.02 布局的限制被明确分类，
+没有作为通过条件。
 
 数值比较采用：整数/索引字段精确比较，时间字段绝对误差 `1e-6`，其余
 浮点字段 `abs <= 1e-11 + 1e-9 * max(abs(a), abs(b))`。

@@ -32,6 +32,7 @@ STATUS_NAMES = (
     "PRESENCE_MISMATCH",
     "COVERAGE_GAP_RTKLIB",
     "COVERAGE_GAP_GEORINEX",
+    "COVERAGE_GAP_NAV_SOLUTIONS_RINEX",
     "SEMANTIC_MAPPING_GAP",
     "REFERENCE_UNRESOLVED",
 )
@@ -513,6 +514,21 @@ def mapping(record, field):
 def geo_mapping(record, field):
     if record["record_type"] != "EPH":
         return None
+    name = field["name"]
+    system = record["system"]
+    message = record["message_type"]
+    if system in {"G", "J"} and name.startswith("isc") and name[3:].isdigit():
+        return {
+            0: "ISC_L1CA", 1: "ISC_L2C", 2: "ISC_L5I5", 3: "ISC_L5Q5",
+            4: "ISC_L1Cd", 5: "ISC_L1Cp",
+        }.get(int(name[3:]))
+    if system == "C" and message in {"CNV1", "CNV2", "CNV3"}:
+        if name == "isc0":
+            return "ISC_B1Cd" if message == "CNV1" else "ISC_B2ad"
+        if name == "tgd0":
+            return {"CNV1": "TGD_B1Cp", "CNV2": "TGD_B1Cp", "CNV3": "TGD_B2bI"}[message]
+        if name == "tgd1":
+            return "TGD_B2ap"
     return GEORINEX_NAMES.get(field["name"])
 
 

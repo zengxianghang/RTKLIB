@@ -93,6 +93,22 @@ def canonical_ref_field(record, raw_name):
     if record_type == "STO":
         return {"corr_type": "lhs", "corr_id": "rhs", "a0": "polynomial[0]",
                 "a1": "polynomial[1]", "a2": "polynomial[2]"}.get(raw_name)
+    system = record["system"]
+    message = record["message_type"]
+    if system in {"G", "J"} and raw_name.startswith("isc") and raw_name[3:].isdigit():
+        return {
+            0: "iscL1Ca", 1: "iscL2C", 2: "iscL5I5", 3: "iscL5Q5",
+            4: "iscL1Cd", 5: "iscL1Cp",
+        }.get(int(raw_name[3:]))
+    if system == "C" and message in {"CNV1", "CNV2", "CNV3"}:
+        if raw_name == "isc0":
+            return "iscB1Cd" if message == "CNV1" else "iscB2ad"
+        if raw_name == "tgd0":
+            return {"CNV1": "tgdB1Cp", "CNV2": "tgdB1Cp", "CNV3": "tgdB2bI"}[message]
+        if raw_name == "tgd1":
+            return "tgdB2ap"
+        if raw_name == "iodc":
+            return "aodc"
     return ref_field(record["system"], raw_name)
 
 
@@ -203,6 +219,26 @@ def canonical_c_value(record, field, value):
     return value
 
 
+def mapping_text(record, mapping):
+    if not mapping:
+        return ""
+    name, slot = mapping
+    text = f"{record['record_type'].lower()}.{name}"
+    if slot >= 0:
+        text += f"[{slot}]"
+    return text
+
+
+def numeric_diff(a, b):
+    try:
+        if a is None or b is None:
+            return "", ""
+        diff = abs(float(a) - float(b))
+        return diff, diff / max(abs(float(a)), abs(float(b)), 1e-300)
+    except (TypeError, ValueError):
+        return "", ""
+
+
 def read_ref(path, legacy_message=False):
     records = defaultdict(dict)
     with path.open() as stream:
@@ -218,6 +254,8 @@ def reference_status(status):
         return "MATCH"
     if status == "PRESENCE_MISMATCH":
         return "PRESENCE_MISMATCH"
+    if status == "COVERAGE_GAP_NAV_SOLUTIONS":
+        return "COVERAGE_GAP_NAV_SOLUTIONS_RINEX"
     return "REFERENCE_UNRESOLVED"
 
 
@@ -284,7 +322,9 @@ def geo_probe(path):
     return {"ok": True, "variables": sorted(arrays), "error": ""}, {"index": index, "arrays": arrays}
 
 
-def geo_field(system, name):
+def geo_field(record, name):
+    system = record["system"]
+    message = record["message_type"]
     if system in {"G", "J"}:
         names = dict(COMMON)
         names.update({"af0": "SVclockBias", "af1": "SVclockDrift", "af2": "SVclockDriftRate",
@@ -292,7 +332,9 @@ def geo_field(system, name):
                       "svh": "health", "tgd0": "TGD", "iodc": "IODC", "ttr": "TransTime",
                       "fit": "FitIntvl", "sqrt_A": "sqrtA", "toe": "Toe", "deln": "DeltaN",
                       "M0": "M0", "OMG0": "Omega0", "omg": "omega", "OMGd": "OmegaDot",
-                      "i0": "Io"})
+                      "i0": "Io", "isc0": "ISC_L1CA", "isc1": "ISC_L2C",
+                      "isc2": "ISC_L5I5", "isc3": "ISC_L5Q5", "isc4": "ISC_L1Cd",
+                      "isc5": "ISC_L1Cp"})
         return names.get(name)
     if system == "E":
         names = {"af0": "SVclockBias", "af1": "SVclockDrift", "af2": "SVclockDriftRate",
@@ -311,6 +353,13 @@ def geo_field(system, name):
                  "OMGd": "OmegaDot", "idot": "IDOT", "week": "BDTWeek", "sva": "URA",
                  "svh": "health", "tgd0": "TGD1", "iodc": "TGD2", "ttr": "TransTime",
                  "fit": "AODC"}
+        if message in {"CNV1", "CNV2", "CNV3"}:
+            names.update({
+                "isc0": "ISC_B1Cd" if message == "CNV1" else "ISC_B2ad",
+                "tgd0": {"CNV1": "TGD_B1Cp", "CNV2": "TGD_B1Cp", "CNV3": "TGD_B2bI"}[message],
+                "tgd1": "TGD_B2ap",
+                "iodc": "AODC",
+            })
         return names.get(name)
     if system == "R":
         return {"taun": "SVclockBias", "gamn": "SVclockDrift", "pos_x": "X", "vel_x": "dX",
@@ -352,6 +401,19 @@ def main():
     version = raw[0]["version"] if raw else 0.0
     ref = read_ref(args.nav_solutions_dump, legacy_message=version < 4.0)
     geo_info, geo = geo_probe(args.fixture)
+    geo_candidates = {}
+    geo_occurrence = Counter()
+    for record in raw:
+        geo_key = (record["system"], record["prn"], record["epoch"])
+        occurrence = geo_occurrence[geo_key]
+        geo_occurrence[geo_key] += 1
+        candidate = None
+        if geo is not None:
+            candidates = geo["index"].get(geo_key, [])
+            if occurrence < len(candidates):
+                ti, si = candidates[occurrence]
+                candidate = {name: values[ti, si] for name, values in geo["arrays"].items()}
+        geo_candidates[id(record)] = candidate
     c_groups_raw = rc.read_dump(args.fixture, args.rtklib_dump)
     c_groups = defaultdict(list)
     for key, values in c_groups_raw.items():
@@ -378,6 +440,7 @@ def main():
     selected = {}
     ref_field_stats = Counter()
     rtklib_field_stats = Counter()
+    geo_stats = Counter()
     canonical_rows = []
     unmatched_rows = []
     for key, records in raw_by_key.items():
@@ -407,7 +470,10 @@ def main():
         used_c = set()
         for c_index, candidate in enumerate(c_list):
             best = None
-            best_score = -1
+            # A valid STO candidate can score below zero because its text
+            # fields are intentionally non-numeric.  Do not leave it
+            # unmatched merely because the initial sentinel is -1.
+            best_score = -10**9
             for raw_index, candidate_raw in enumerate(records):
                 if raw_index in c_matches.values():
                     continue
@@ -440,15 +506,17 @@ def main():
             c_duplicate = bool(c_list) and len(records) > 1 and index not in raw_to_c
             for field in record["fields"]:
                 target = canonical_ref_field(record, field["name"])
-                geo_name = geo_field(record["system"], field["name"])
+                geo_name = geo_field(record, field["name"])
                 c_map = c_field_mapping(record, field)
                 c_value = c_present = None
                 c_text = ""
                 if c_map and c_map in c_fields:
                     c_value, c_present, c_text = c_fields[c_map]
                     c_value = canonical_c_value(record, field, c_value)
+                c_detail = "MATCH"
                 if c_duplicate:
-                    c_status = "RTKLIB_DUPLICATE_COLLAPSE"
+                    c_detail = "RTKLIB_DUPLICATE_COLLAPSE"
+                    c_status = "PRESENCE_MISMATCH"
                 elif not c_list:
                     c_status = "COVERAGE_GAP_RTKLIB"
                 elif not c_map:
@@ -463,15 +531,32 @@ def main():
                     c_status = "MATCH" if comparable(field["name"], field["value"], c_value) else "VALUE_MISMATCH"
                 rtklib_field_stats[c_status] += 1
 
+                geo_candidate = geo_candidates.get(id(record))
+                geo_value = None
+                geo_present = False
+                if not geo_info["ok"]:
+                    geo_status = "COVERAGE_GAP_GEORINEX"
+                elif not geo_name:
+                    geo_status = "SEMANTIC_MAPPING_GAP"
+                elif geo_candidate is None or geo_name not in geo_candidate:
+                    geo_status = "PRESENCE_MISMATCH" if field["presence"] else "MATCH"
+                elif isinstance(geo_candidate[geo_name], float) and math.isnan(geo_candidate[geo_name]):
+                    geo_status = "PRESENCE_MISMATCH" if field["presence"] else "MATCH"
+                else:
+                    geo_value = canonical_geo_value(record["system"], field["name"], float(geo_candidate[geo_name]))
+                    geo_present = True
+                    geo_status = "MATCH" if (not field["presence"] or comparable(field["name"], field["value"], geo_value)) else "VALUE_MISMATCH"
+                geo_stats[geo_status] += 1
+
                 r_status = "MATCH"
                 r_value = None
                 r_kind = "missing"
                 if duplicate:
                     r_status = "REFERENCE_DUPLICATE_COLLAPSE"
-                elif target is None:
-                    r_status = "SEMANTIC_MAPPING_GAP"
                 elif ref_record is None:
                     r_status = "COVERAGE_GAP_NAV_SOLUTIONS"
+                elif target is None:
+                    r_status = "SEMANTIC_MAPPING_GAP"
                 elif target not in ref_record:
                     r_status = "PRESENCE_MISMATCH" if field["presence"] else "MATCH"
                 else:
@@ -485,31 +570,42 @@ def main():
                     else:
                         r_status = "MATCH" if comparable(field["name"], field["value"], r_value) else "VALUE_MISMATCH"
                 ref_field_stats[r_status] += 1
-                if r_status == "MATCH" and c_status == "MATCH":
-                    final = "MATCH"
-                elif c_status == "VALUE_MISMATCH":
+                if c_status == "VALUE_MISMATCH" or geo_status == "VALUE_MISMATCH":
                     final = "VALUE_MISMATCH"
                 elif r_status == "VALUE_MISMATCH":
-                    # If raw and RTKLIB agree, the remaining discrepancy is
-                    # an unresolved independent-reference representation or
-                    # mapping.  Keep it explicit without calling it a raw
-                    # value mismatch.
                     final = "REFERENCE_UNRESOLVED"
                 elif c_status == "COVERAGE_GAP_RTKLIB":
                     final = "COVERAGE_GAP_RTKLIB"
-                elif c_status == "SEMANTIC_MAPPING_GAP":
+                elif geo_status == "COVERAGE_GAP_GEORINEX":
+                    final = "COVERAGE_GAP_GEORINEX"
+                elif r_status == "COVERAGE_GAP_NAV_SOLUTIONS":
+                    final = "COVERAGE_GAP_NAV_SOLUTIONS_RINEX"
+                elif c_status == "SEMANTIC_MAPPING_GAP" or geo_status == "SEMANTIC_MAPPING_GAP":
                     final = "SEMANTIC_MAPPING_GAP"
-                elif c_status == "PRESENCE_MISMATCH" or r_status == "PRESENCE_MISMATCH":
+                elif c_status == "PRESENCE_MISMATCH" or geo_status == "PRESENCE_MISMATCH" or r_status == "PRESENCE_MISMATCH":
                     final = "PRESENCE_MISMATCH"
+                elif r_status == "MATCH" and c_status == "MATCH" and geo_status == "MATCH":
+                    final = "MATCH"
                 elif r_status != "MATCH":
                     final = reference_status(r_status)
                 else:
-                    final = "MATCH"
+                    final = "REFERENCE_UNRESOLVED"
+                rtklib_detail = c_detail if c_detail != "MATCH" else c_status
                 canonical_rows.append({
+                    "file": str(args.fixture), "version": version,
+                    "record_type": record["record_type"], "system": record["system"],
+                    "prn": record["prn"], "message_type": record["message_type"],
+                    "subtype": record["subtype"], "epoch": record["epoch"],
                     "key": key, "occurrence": index, "field": field["name"],
+                    "slot": field["slot"], "raw_text": field["raw_text"],
+                    "raw_presence": field["presence"],
+                    "rtklib_mapping": mapping_text(record, c_map),
                     "reference_field": target or "", "geo_field": geo_name or "",
                     "raw_value": field["value"], "rtklib_value": c_value,
-                    "nav_solutions_value": r_value, "rtklib_status": c_status,
+                    "rtklib_presence": bool(c_present), "georinex_value": geo_value,
+                    "georinex_presence": geo_present, "georinex_status": geo_status,
+                    "nav_solutions_value": r_value, "nav_solutions_presence": target in (ref_record or {}),
+                    "rtklib_status": c_status, "rtklib_detail": rtklib_detail,
                     "nav_solutions_status": reference_status(r_status),
                     "reference_detail": r_status, "status": final,
                     "source_location": field["source_location"],
@@ -542,7 +638,7 @@ def main():
                 ti, si = candidates[occurrence]
                 candidate = {name: values[ti, si] for name, values in geo["arrays"].items()}
         for field in record["fields"]:
-            name = geo_field(record["system"], field["name"])
+            name = geo_field(record, field["name"])
             if not geo_info["ok"]:
                 status = "COVERAGE_GAP_GEORINEX"
                 value = None
@@ -567,6 +663,43 @@ def main():
         for row in geo_rows:
             stream.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+    inventory_columns = [
+        "file", "rinex_version", "record_type", "system", "prn", "message_type",
+        "subtype", "epoch", "field_name", "field_index_or_slot", "raw_location",
+        "raw_text", "raw_value", "presence_raw", "rtklib_mapping", "rtklib_value",
+        "presence_rtklib", "georinex_mapping", "georinex_value", "presence_georinex",
+        "nav_solutions_mapping", "nav_solutions_value", "presence_nav_solutions",
+        "abs_diff", "rel_diff", "comparison_class", "rtklib_status", "rtklib_detail",
+        "georinex_status", "nav_solutions_status", "reference_detail", "source_location",
+    ]
+    with (args.artifacts / "field_inventory.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=inventory_columns)
+        writer.writeheader()
+        for row in canonical_rows:
+            abs_diff, rel_diff = numeric_diff(row["raw_value"], row["rtklib_value"])
+            writer.writerow({
+                "file": row["file"], "rinex_version": f"{row['version']:.2f}",
+                "record_type": row["record_type"], "system": row["system"],
+                "prn": row["prn"], "message_type": row["message_type"],
+                "subtype": row["subtype"], "epoch": row["epoch"],
+                "field_name": row["field"], "field_index_or_slot": row["slot"],
+                "raw_location": row["source_location"], "raw_text": row["raw_text"],
+                "raw_value": row["raw_value"], "presence_raw": int(row["raw_presence"]),
+                "rtklib_mapping": row["rtklib_mapping"], "rtklib_value": row["rtklib_value"],
+                "presence_rtklib": int(row["rtklib_presence"]),
+                "georinex_mapping": row["geo_field"], "georinex_value": row["georinex_value"],
+                "presence_georinex": int(row["georinex_presence"]),
+                "nav_solutions_mapping": row["reference_field"],
+                "nav_solutions_value": row["nav_solutions_value"],
+                "presence_nav_solutions": int(row["nav_solutions_presence"]),
+                "abs_diff": abs_diff, "rel_diff": rel_diff,
+                "comparison_class": row["status"], "rtklib_status": row["rtklib_status"],
+                "rtklib_detail": row["rtklib_detail"], "georinex_status": row["georinex_status"],
+                "nav_solutions_status": row["nav_solutions_status"],
+                "reference_detail": row["reference_detail"],
+                "source_location": row["source_location"],
+            })
+
     summary = {
         "fixture": str(args.fixture),
         "raw_record_count": len(raw),
@@ -583,11 +716,24 @@ def main():
         "rtklib_raw_key_intersection": len(raw_keys & c_keys),
         "rtklib_raw_only_keys": len(raw_keys - c_keys),
         "unmatched_record_count": len(unmatched_rows),
+        "raw_field_count": sum(len(record["fields"]) for record in raw),
+        "field_inventory_count": len(canonical_rows),
+        "field_inventory_complete": len(canonical_rows) == sum(len(record["fields"]) for record in raw),
         "unclassified_field_count": 0,
         "value_mismatch_count": sum(row["status"] == "VALUE_MISMATCH" for row in canonical_rows),
+        "georinex_value_mismatch_count": sum(row["status"] == "VALUE_MISMATCH" for row in geo_rows),
+        "nav_solutions_coverage_gap_field_count": sum(
+            row["nav_solutions_status"] == "COVERAGE_GAP_NAV_SOLUTIONS_RINEX"
+            for row in canonical_rows
+        ),
         "rtklib_field_status": dict(rtklib_field_stats),
         "nav_solutions_field_status": dict(Counter(reference_status(status) for status in ref_field_stats for _ in range(ref_field_stats[status]))),
         "three_way_status": dict(Counter(row["status"] for row in canonical_rows)),
+        "four_way_status": dict(Counter(row["status"] for row in canonical_rows)),
+        "tgd_bgd_isc_status": dict(Counter(
+            row["status"] for row in canonical_rows
+            if row["field"].startswith("tgd") or row["field"].startswith("isc")
+        )),
         "georinex": {**geo_info, "field_status": dict(geo_stats)},
         "parse_errors": parse_errors,
         "reference": {"repository": "https://github.com/nav-solutions/rinex", "revision": "e38e5621907eb3c39858a9e78312513fbc7193de"},
@@ -597,14 +743,35 @@ def main():
     ) + sum(row["status"] not in STATUS_NAMES for row in geo_rows)
     unmatched_columns = [
         "file", "version", "system", "prn", "record_type", "message_type", "subtype",
-        "week", "toe", "toc", "sat", "epoch", "reason", "source_location",
+        "week", "toe", "toc", "sat", "epoch", "reason", "mismatch_reason", "source_location",
     ]
     with (args.artifacts / "unmatched_records.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=unmatched_columns)
         writer.writeheader()
         for row in unmatched_rows:
             writer.writerow({
-                "file": str(args.fixture), "version": f"{version:.2f}", **row,
+                "file": str(args.fixture), "version": f"{version:.2f}",
+                **row, "mismatch_reason": row.get("mismatch_reason", row.get("reason", "")),
+            })
+    reference_unmatched_rows = []
+    raw_by_reference_key = defaultdict(list)
+    for raw_key, records in raw_by_key.items():
+        raw_by_reference_key[reference_key(raw_key)].extend(records)
+    for key in sorted(ref_missing_keys):
+        metadata = raw_record_metadata(raw_by_reference_key[key][0])
+        metadata["reason"] = "NAV_SOLUTIONS_RECORD_MISSING"
+        reference_unmatched_rows.append(metadata)
+    for key in sorted(ref_extra_keys):
+        metadata = c_record_metadata(key, {})
+        metadata["reason"] = "NAV_SOLUTIONS_RECORD_EXTRA"
+        reference_unmatched_rows.append(metadata)
+    with (args.artifacts / "reference_unmatched_records.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=unmatched_columns)
+        writer.writeheader()
+        for row in reference_unmatched_rows:
+            writer.writerow({
+                "file": str(args.fixture), "version": f"{version:.2f}",
+                **row, "mismatch_reason": row.get("mismatch_reason", row.get("reason", "")),
             })
     (args.artifacts / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
