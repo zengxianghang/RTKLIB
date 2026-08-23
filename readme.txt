@@ -68,6 +68,7 @@ The features of RTKLIB are:
     (f) Plot Solutions and Obs Data  RTKPLOT         -
     (g) Downloder of GNSS Data       RTKGET          -
     (h) NTRIP Browser                NTRIPSRCBROWS   -
+    (i) RINEX OBS to NovAtel RANGEA  -               RNX2RANGE
     --------------------------------------------------------------------------
 
 (8) All of the executable binary APs for Windows are included in the package as

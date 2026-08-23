@@ -1,0 +1,7 @@
+     4.02           O                   M                   RINEX VERSION / TYPE
+G    5 C1C L1C D1C S1C X1                                   SYS / # / OBS TYPES
+DBHZ                                                        SIGNAL STRENGTH UNIT
+                                                GPS         TIME OF FIRST OBS
+                                                            END OF HEADER
+> 2024 01 01 00 00  0.0000000  0  1
+G01  22000000.00007      1000.00027      -100.00007        45.00007         5.00007

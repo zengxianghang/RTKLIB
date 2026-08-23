@@ -943,6 +943,7 @@ static int readrnxobsb(FILE *fp, const char *opt, double ver,
                        char tobs[][MAXOBSTYPE][4], int *flag, obsd_t *data)
 {
     gtime_t time={0};
+    obsd_t discard={0},*current;
     sigind_t index[6]={{0}};
     char buff[MAXRNXLEN];
     int i=0,n=0,nsat=0,sats[MAXOBS]={0},mask;
@@ -968,12 +969,13 @@ static int readrnxobsb(FILE *fp, const char *opt, double ver,
             }
         }
         else if (*flag<=2||*flag==6) {
-            
-            data[n].time=time;
-            data[n].sat=(unsigned char)sats[i-1];
+
+            current=n<MAXOBS?data+n:&discard;
+            current->time=time;
+            current->sat=(unsigned char)(i-1<MAXOBS?sats[i-1]:0);
             
             /* decode obs data */
-            if (decode_obsdata(fp,buff,ver,mask,index,data+n)&&n<MAXOBS) n++;
+            if (decode_obsdata(fp,buff,ver,mask,index,current)&&n<MAXOBS) n++;
         }
         if (++i>nsat) return n;
     }
