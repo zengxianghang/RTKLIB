@@ -38,7 +38,7 @@ static void fill_case(obsd_t *obs, double *rs, double *dts, nav_t *nav,
         for (j=0;j<3;j++) vs[j]=rs[i*6+3+j]-true_vel[j];
         rate=dot(vs,e,3)+OMGE/CLIGHT*(rs[i*6+4]*rr[0]+rs[i*6+1]*true_vel[0]-
                                       rs[i*6+3]*rr[1]-rs[i*6]*true_vel[1]);
-        obs[i].D[0]=-(rate+true_clkdrift)/lam;
+        obs[i].D[0]=-(float)((rate+true_clkdrift)/lam);
     }
 }
 
@@ -50,6 +50,7 @@ int main(void)
     const double rr[3]={6378137.0,0.0,0.0};
     const double expected_vel[3]={12.3,-4.5,1.2};
     const double expected_clkdrift=0.7;
+    const double doppler_float_tolerance=1E-3;
     double vel[3],clkdrift;
     int use[5]={1,1,1,1,1},used=0;
     char msg[128];
@@ -59,10 +60,10 @@ int main(void)
         fprintf(stderr,"velocity solve failed: %s\n",msg);
         return 1;
     }
-    if (used!=5||!nearly_equal(vel[0],expected_vel[0],1E-6)||
-        !nearly_equal(vel[1],expected_vel[1],1E-6)||
-        !nearly_equal(vel[2],expected_vel[2],1E-6)||
-        !nearly_equal(clkdrift,expected_clkdrift,1E-6)) {
+    if (used!=5||!nearly_equal(vel[0],expected_vel[0],doppler_float_tolerance)||
+        !nearly_equal(vel[1],expected_vel[1],doppler_float_tolerance)||
+        !nearly_equal(vel[2],expected_vel[2],doppler_float_tolerance)||
+        !nearly_equal(clkdrift,expected_clkdrift,doppler_float_tolerance)) {
         fprintf(stderr,"unexpected solution used=%d vel=%.9f %.9f %.9f drift=%.9f\n",
                 used,vel[0],vel[1],vel[2],clkdrift);
         return 2;
