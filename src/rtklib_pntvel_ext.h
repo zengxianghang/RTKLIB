@@ -13,7 +13,12 @@ extern "C" {
  * and apply the same Earth-rotation term as pntpos.c/resdop(). A current
  * pseudorange position fix is not required.
  *
- * `doppler_valid` contains one byte per observation (0=ignore, nonzero=use).
+ * `doppler_valid` and `wavelength_m` contain one value per observation.
+ * Invalid observations are ignored. An enabled observation requires a finite,
+ * positive wavelength. Supplying wavelength explicitly preserves the same
+ * residual equation for modern signals and GLONASS FDMA channels instead of
+ * silently assuming RTKLIB frequency slot 0.
+ *
  * Each observation must still carry a nonzero P[0] so RTKLIB satposs() can
  * derive signal transmission time from Receiver NAV.
  *
@@ -21,8 +26,9 @@ extern "C" {
  * the fourth state of pntpos.c/resdop().
  */
 int rtklib_pntvel_ext(const obsd_t *obs, const unsigned char *doppler_valid,
-                      int n, const nav_t *nav, const prcopt_t *opt,
-                      const double *receiver_ecef_m, double *velocity_ecef_mps,
+                      const double *wavelength_m, int n, const nav_t *nav,
+                      const prcopt_t *opt, const double *receiver_ecef_m,
+                      double *velocity_ecef_mps,
                       double *receiver_clock_drift_mps, int *used_satellites,
                       char *msg);
 
