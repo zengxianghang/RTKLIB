@@ -2,9 +2,11 @@
 
 #define PNTVEL_MAXITR 10
 
-static int velocity_residuals(const obsd_t *obs, const unsigned char *doppler_valid,
-                              int n, const double *rs, const double *dts,
-                              const nav_t *nav, const double *receiver_ecef_m,
+static int velocity_residuals(const obsd_t *obs,
+                              const unsigned char *doppler_valid,
+                              const double *wavelength_m, int n,
+                              const double *rs, const double *dts,
+                              const double *receiver_ecef_m,
                               const double *state, const double *azel,
                               const int *vsat, double *residual,
                               double *design)
@@ -18,8 +20,8 @@ static int velocity_residuals(const obsd_t *obs, const unsigned char *doppler_va
     for (i=0;i<n&&i<MAXOBS;i++) {
         if (!doppler_valid[i]||!vsat[i]) continue;
 
-        lambda=nav->lam[obs[i].sat-1][0];
-        if (lambda==0.0||norm(rs+3+i*6,3)<=0.0) continue;
+        lambda=wavelength_m[i];
+        if (!(lambda>0.0)||!isfinite(lambda)||norm(rs+3+i*6,3)<=0.0) continue;
 
         cosel=cos(azel[1+i*2]);
         a[0]=sin(azel[i*2])*cosel;
@@ -41,8 +43,9 @@ static int velocity_residuals(const obsd_t *obs, const unsigned char *doppler_va
 }
 
 int rtklib_pntvel_ext(const obsd_t *obs, const unsigned char *doppler_valid,
-                      int n, const nav_t *nav, const prcopt_t *opt,
-                      const double *receiver_ecef_m, double *velocity_ecef_mps,
+                      const double *wavelength_m, int n, const nav_t *nav,
+                      const prcopt_t *opt, const double *receiver_ecef_m,
+                      double *velocity_ecef_mps,
                       double *receiver_clock_drift_mps, int *used_satellites,
                       char *msg)
 {
@@ -52,8 +55,8 @@ int rtklib_pntvel_ext(const obsd_t *obs, const unsigned char *doppler_valid,
 
     if (msg) msg[0]='\0';
     if (used_satellites) *used_satellites=0;
-    if (!obs||!doppler_valid||n<=0||!nav||!opt||!receiver_ecef_m||
-        !velocity_ecef_mps||!receiver_clock_drift_mps) {
+    if (!obs||!doppler_valid||!wavelength_m||n<=0||!nav||!opt||
+        !receiver_ecef_m||!velocity_ecef_mps||!receiver_clock_drift_mps) {
         if (msg) strcpy(msg,"invalid point-velocity arguments");
         return 0;
     }
@@ -71,16 +74,17 @@ int rtklib_pntvel_ext(const obsd_t *obs, const unsigned char *doppler_valid,
 
     for (i=0;i<nobs;i++) {
         if (!doppler_valid[i]||obs[i].sat<=0||obs[i].sat>MAXSAT) continue;
+        if (!(wavelength_m[i]>0.0)||!isfinite(wavelength_m[i])) continue;
         if ((range=geodist(rs+i*6,receiver_ecef_m,los))<=0.0) continue;
         (void)range;
         if (satazel(pos,los,azel+i*2)<opt->elmin) continue;
         if (satexclude(obs[i].sat,svh[i],opt)) continue;
-        if (nav->lam[obs[i].sat-1][0]==0.0||norm(rs+3+i*6,3)<=0.0) continue;
+        if (norm(rs+3+i*6,3)<=0.0) continue;
         vsat[i]=1;
     }
 
     for (i=0;i<PNTVEL_MAXITR;i++) {
-        nv=velocity_residuals(obs,doppler_valid,nobs,rs,dts,nav,
+        nv=velocity_residuals(obs,doppler_valid,wavelength_m,nobs,rs,dts,
                               receiver_ecef_m,state,azel,vsat,residual,design);
         if (nv<4) {
             if (msg) sprintf(msg,"lack of valid Doppler observations ns=%d",nv);
