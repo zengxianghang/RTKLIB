@@ -1,0 +1,50 @@
+name: issue6-family-patch
+on:
+  push:
+    branches: [issue-6-all-signal-residuals-bds-tgd]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-all-signal-residuals-bds-tgd
+      - name: Patch API
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('src/rtklib_residual_ext.h')
+          s=h.read_text()
+          s=s.replace('int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,\n                                const nav_t *nav, double *raw_code_bias_m,',
+                      'int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,\n                                int required_message_type, const nav_t *nav, double *raw_code_bias_m,')
+          s=s.replace('                              double receiver_system_bias_m,\n                              double wavelength_m,',
+                      '                              double receiver_system_bias_m,\n                              int required_message_type, double wavelength_m,')
+          h.write_text(s)
+
+          p=Path('src/rtklib_residual_ext.c')
+          s=p.read_text()
+          s=s.replace('static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,\n                                      const nav_t *nav, int *message_type)',
+                      'static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,\n                                      int required_message_type, const nav_t *nav, int *message_type)')
+          s=s.replace('        type=canonical_message_type(nav->eph+i,sys);\n        if (!eph_supports_code(sys,type,code)) continue;',
+                      '        type=canonical_message_type(nav->eph+i,sys);\n        if (required_message_type&&type!=required_message_type) continue;\n        if (!eph_supports_code(sys,type,code)) continue;')
+          s=s.replace('int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,\n                                const nav_t *nav, double *raw_code_bias_m,',
+                      'int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,\n                                int required_message_type, const nav_t *nav, double *raw_code_bias_m,')
+          s=s.replace('    eph=select_signal_eph(time,sat,code,nav,&type);',
+                      '    eph=select_signal_eph(time,sat,code,required_message_type,nav,&type);')
+          s=s.replace('                              double receiver_system_bias_m,\n                              double wavelength_m,',
+                      '                              double receiver_system_bias_m,\n                              int required_message_type, double wavelength_m,')
+          s=s.replace('    stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,obs->code[0],nav,\n                                     &code_bias,bias_info);',
+                      '    stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,obs->code[0],required_message_type,nav,\n                                     &code_bias,bias_info);')
+          p.write_text(s)
+          PY
+          git diff --check
+          git rm .github/workflows/issue6_family_patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/rtklib_residual_ext.h src/rtklib_residual_ext.c
+          git commit -m 'feat: bind signal residuals to navigation message family'
+          git push origin HEAD:issue-6-all-signal-residuals-bds-tgd
