@@ -1,0 +1,145 @@
+name: issue6-unify-prange
+
+on:
+  push:
+    branches: [issue-6-all-signal-residuals-bds-tgd]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-all-signal-residuals-bds-tgd
+          fetch-depth: 0
+      - name: Apply shared prange and message-mask changes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          h = Path('src/rtklib_signal_bias_ext.h')
+          s = h.read_text()
+          s = s.replace('required_message_type=0 allows any message family compatible with code.\n * Otherwise only the requested RINEX-4 navigation message family is eligible.',
+                        'required_message_mask=0 allows any message family compatible with code.\n * Otherwise any compatible NAV_* bit present in the mask is eligible.')
+          s = s.replace('int required_message_type, const nav_t *nav,',
+                        'int required_message_mask, const nav_t *nav,')
+          h.write_text(s)
+
+          c = Path('src/rtklib_signal_bias_ext.c')
+          s = c.read_text()
+          s = s.replace('int required_message_type,\n                                      const nav_t *nav, int *message_type)',
+                        'int required_message_mask,\n                                      const nav_t *nav, int *message_type)')
+          s = s.replace('if (required_message_type&&type!=required_message_type) continue;',
+                        'if (required_message_mask&&!(type&required_message_mask)) continue;')
+          s = s.replace('int required_message_type, const nav_t *nav,',
+                        'int required_message_mask, const nav_t *nav,')
+          s = s.replace('eph=select_signal_eph(time,sat,code,required_message_type,nav,&type);',
+                        'eph=select_signal_eph(time,sat,code,required_message_mask,nav,&type);')
+          c.write_text(s)
+
+          rh = Path('src/rtklib_residual_ext.h')
+          s = rh.read_text().replace('int required_message_type, double wavelength_m,',
+                                     'int required_message_mask, double wavelength_m,')
+          rh.write_text(s)
+          rc = Path('src/rtklib_residual_ext.c')
+          s = rc.read_text().replace('int required_message_type, double wavelength_m,',
+                                     'int required_message_mask, double wavelength_m,')
+          s = s.replace('required_message_type,nav,&code_bias,',
+                        'required_message_mask,nav,&code_bias,')
+          rc.write_text(s)
+
+          p = Path('src/pntpos.c')
+          s = p.read_text()
+          if '#include "rtklib_signal_bias_ext.h"' not in s:
+              s = s.replace('#include "rtklib.h"\n', '#include "rtklib.h"\n#include "rtklib_signal_bias_ext.h"\n', 1)
+
+          old = '''    /* if no P1-P2 DCB, use TGD instead */
+    if (P1_P2==0.0&&(sys&(SYS_GPS|SYS_GAL|SYS_QZS))) {
+        P1_P2=(1.0-gamma)*gettgd(obs->time,obs->sat,0,nav);
+    }
+    if (opt->ionoopt==IONOOPT_IFLC) { /* dual-frequency */
+        
+        if (P1==0.0||P2==0.0) return 0.0;
+        if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
+        if (obs->code[j]==CODE_L2C) P2+=P2_C2; /* C2->P2 */
+        
+        /* iono-free combination */
+        PC=(gamma*P1-P2)/(gamma-1.0);
+    }
+    else { /* single-frequency */
+        
+        if (P1==0.0) return 0.0;
+        if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
+        if (P1_P2==0.0&&sys==SYS_CMP) {
+            /* BDS-SIS-ICD: B1I/B2I clocks require TGD1/TGD2; B3I is
+             * the broadcast-clock reference and needs no extra correction. */
+            if      (obs->code[i]==CODE_L2I) PC=P1-gettgd(obs->time,obs->sat,0,nav);
+            else if (obs->code[i]==CODE_L7I) PC=P1-gettgd(obs->time,obs->sat,1,nav);
+            else                             PC=P1;
+        }
+        else PC=P1-P1_P2/(1.0-gamma);
+    }
+'''
+          new = '''    if (opt->ionoopt==IONOOPT_IFLC) { /* dual-frequency */
+        /* Preserve the legacy external DCB/IFLC path. */
+        if (P1_P2==0.0&&(sys&(SYS_GPS|SYS_GAL|SYS_QZS))) {
+            P1_P2=(1.0-gamma)*gettgd(obs->time,obs->sat,0,nav);
+        }
+        if (P1==0.0||P2==0.0) return 0.0;
+        if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
+        if (obs->code[j]==CODE_L2C) P2+=P2_C2; /* C2->P2 */
+        PC=(gamma*P1-P2)/(gamma-1.0);
+    }
+    else { /* single-frequency */
+        double signal_bias=0.0;
+        int signal_bias_stat;
+        if (P1==0.0) return 0.0;
+        /* External DCBs retain precedence. Without an external DCB, use the
+         * ICD/message-specific broadcast bias for the actual observation code. */
+        if (P1_P2!=0.0||P1_C1!=0.0) {
+            if (obs->code[i]==CODE_L1C) P1+=P1_C1;
+            PC=P1-P1_P2/(1.0-gamma);
+        }
+        else {
+            signal_bias_stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,
+                obs->code[i],0,nav,&signal_bias,NULL);
+            PC=signal_bias_stat>0?P1-signal_bias:P1;
+        }
+    }
+'''
+          if old not in s:
+              raise SystemExit('pntpos prange anchor not found')
+          p.write_text(s.replace(old,new,1))
+
+          t = Path('tests/signal_bias_ext/test_signal_bias_ext.c')
+          s = t.read_text()
+          insert = '''\n    /* A legacy-family mask accepts D1/D2/D1D2 but not the closer CNAV record. */\n    eph[0].hdr.msg_type=NAV_D1;\n    stat=rtklib_signal_code_bias_ext(timeadd(t0,10.0),c01,CODE_L2I,\n        NAV_D1|NAV_D2|NAV_D1D2,&nav,&bias,&info);\n    ok&=stat==1&&info.iode==10&&expect_close("B1I legacy mask",bias,CLIGHT*1E-8);\n    eph[0].hdr.msg_type=NAV_D1D2;\n'''
+          anchor = '    stat=rtklib_signal_code_bias_ext(t0,c02,CODE_L1P,NAV_CNV1,&nav,&bias,&info);\n'
+          if insert.strip() not in s:
+              if anchor not in s:
+                  raise SystemExit('signal bias test anchor not found')
+              s = s.replace(anchor, insert + '\n' + anchor, 1)
+          t.write_text(s)
+          PY
+      - name: Run RTKLIB extension tests and compile pntpos
+        run: |
+          make -C tests/signal_bias_ext clean test
+          make -C tests/signal_bias_ext clean
+          CFLAGS='-O2 -std=c99 -Wall -Wextra -pedantic -Isrc -DENAGLO -DENAQZS -DENAGAL -DENACMP -DNFREQ=3'
+          gcc $CFLAGS -c src/rtklib_signal_bias_ext.c -o /tmp/signal_bias.o
+          gcc $CFLAGS -c src/rtklib_residual_ext.c -o /tmp/residual.o
+          gcc $CFLAGS -c src/pntpos.c -o /tmp/pntpos.o
+      - name: Commit validated source and remove helper workflow
+        run: |
+          rm .github/workflows/issue6_unify_prange.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'fix: use signal-specific broadcast bias in single-frequency prange'
+          git push origin HEAD:issue-6-all-signal-residuals-bds-tgd
