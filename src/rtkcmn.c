@@ -4189,6 +4189,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
             if (nav->eph[i].sat!=sat) continue;
             candidate_type=canonical_message_type(nav->eph+i,sys);
             if (!(candidate_type&required_message_mask)) continue;
+            if (!eph_supports_code(sys,candidate_type,code)) continue;
             age=fabs(timediff(nav->eph[i].toe,time));
             if (age>max_age) continue;
             if (!eph||age<best_age||(fabs(age-best_age)<1E-9&&
