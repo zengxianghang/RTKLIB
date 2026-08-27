@@ -58,6 +58,8 @@ static double gettgd(gtime_t time, int sat, int index, const nav_t *nav)
 
     for (i=0;i<nav->n;i++) {
         if (nav->eph[i].sat!=sat) continue;
+        if (sys==SYS_CMP&&nav->eph[i].hdr.msg_type&&
+            !(nav->eph[i].hdr.msg_type&(NAV_D1|NAV_D2|NAV_D1D2))) continue;
         age=fabs(timediff(nav->eph[i].toe,time));
         if (age>max_age) continue;
         if (!best||age<best_age||(fabs(age-best_age)<1E-9&&
