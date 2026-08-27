@@ -1,0 +1,36 @@
+name: issue6-selector-patch
+
+on:
+  push:
+    branches:
+      - issue-6-all-signal-residuals-bds-tgd
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Patch selector and self-delete
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/rtkcmn.c')
+          s = p.read_text()
+          old = '''            candidate_type=canonical_message_type(nav->eph+i,sys);\n            if (!(candidate_type&required_message_mask)) continue;\n            age=fabs(timediff(nav->eph[i].toe,time));'''
+          new = '''            candidate_type=canonical_message_type(nav->eph+i,sys);\n            if (!(candidate_type&required_message_mask)) continue;\n            if (!eph_supports_code(sys,candidate_type,code)) continue;\n            age=fabs(timediff(nav->eph[i].toe,time));'''
+          if old not in s:
+              raise SystemExit('selector anchor not found')
+          p.write_text(s.replace(old, new, 1))
+          Path('.github/workflows/issue6_selector_patch.yml').unlink()
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/rtkcmn.c .github/workflows/issue6_selector_patch.yml
+          git commit -m "fix: enforce signal compatibility in ephemeris selector"
+          git push
