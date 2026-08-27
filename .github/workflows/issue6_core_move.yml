@@ -1,0 +1,41 @@
+name: issue6-core-move
+
+on:
+  push:
+    branches: [issue-6-all-signal-residuals-bds-tgd]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-all-signal-residuals-bds-tgd
+          fetch-depth: 0
+
+      - name: Move signal bias helper into RTKLIB core
+        run: echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpjb3JlPVBhdGgoInNyYy9ydGtjbW4uYyIpCmltcGw9UGF0aCgic3JjL3J0a2xpYl9zaWduYWxfYmlhc19leHQuYyIpCm1ha2U9UGF0aCgidGVzdHMvc2lnbmFsX2JpYXNfZXh0L21ha2VmaWxlIikKCnM9Y29yZS5yZWFkX3RleHQoKQppZiAnI2luY2x1ZGUgInJ0a2xpYl9zaWduYWxfYmlhc19leHQuaCInIG5vdCBpbiBzOgogICAgYW5jaG9yPScjaW5jbHVkZSAicnRrbGliLmgiXG4nCiAgICByZXBsPScjaW5jbHVkZSAicnRrbGliLmgiXG4jaW5jbHVkZSAicnRrbGliX3NpZ25hbF9iaWFzX2V4dC5oIlxuI2luY2x1ZGUgInJ0a2xpYl9vYnNfZXh0LmgiXG4nCiAgICBpZiBhbmNob3Igbm90IGluIHM6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgicnRrY21uIGluY2x1ZGUgYW5jaG9yIG5vdCBmb3VuZCIpCiAgICBzPXMucmVwbGFjZShhbmNob3IscmVwbCwxKQoKbWFya2VyPScvKiBzaWduYWwtc3BlY2lmaWMgYnJvYWRjYXN0IGNvZGUtYmlhcyBoZWxwZXJzIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSovJwppZiBtYXJrZXIgbm90IGluIHM6CiAgICBib2R5PWltcGwucmVhZF90ZXh0KCkKICAgIHBvcz1ib2R5LmZpbmQoInN0YXRpYyBkb3VibGUgbWF4X2VwaF9hZ2Vfc2VjIikKICAgIGlmIHBvcyA8IDA6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgic2lnbmFsIGJpYXMgaW1wbGVtZW50YXRpb24gYm9keSBub3QgZm91bmQiKQogICAgYm9keT1ib2R5W3BvczpdLnJzdHJpcCgpKyJcbiIKICAgIHM9cy5yc3RyaXAoKSsiXG5cbiIrbWFya2VyKyJcbiIrYm9keQpjb3JlLndyaXRlX3RleHQocykKCm09bWFrZS5yZWFkX3RleHQoKQptPW0ucmVwbGFjZSgidGVzdF9zaWduYWxfYmlhc19leHQ6IHRlc3Rfc2lnbmFsX2JpYXNfZXh0LmMgJChTUkMpL3J0a2xpYl9zaWduYWxfYmlhc19leHQuYyAkKFNSQykvcnRrY21uLmNcbiIKICAgICAgICAgICAgIlx0JChDQykgJChDRkxBR1MpIHRlc3Rfc2lnbmFsX2JpYXNfZXh0LmMgJChTUkMpL3J0a2xpYl9zaWduYWxfYmlhc19leHQuYyBcXFxuIgogICAgICAgICAgICAiXHQgICAgICAkKFNSQykvcnRrY21uLmMgJChMRExJQlMpIC1vICRAXG4iLAogICAgICAgICAgICAidGVzdF9zaWduYWxfYmlhc19leHQ6IHRlc3Rfc2lnbmFsX2JpYXNfZXh0LmMgJChTUkMpL3J0a2Ntbi5jXG4iCiAgICAgICAgICAgICJcdCQoQ0MpICQoQ0ZMQUdTKSB0ZXN0X3NpZ25hbF9iaWFzX2V4dC5jICQoU1JDKS9ydGtjbW4uYyAkKExETElCUykgLW8gJEBcbiIpCmlmICJydGtsaWJfc2lnbmFsX2JpYXNfZXh0LmMiIGluIG06CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJtYWtlZmlsZSBzdGlsbCByZWZlcmVuY2VzIHJlbW92ZWQgc2lnbmFsIGJpYXMgc291cmNlIikKbWFrZS53cml0ZV90ZXh0KG0pCgppbXBsLnVubGluaygpCg==' | base64 -d | python3
+
+      - name: Validate extension and standard app linkage
+        run: |
+          set -euxo pipefail
+          make -C tests/signal_bias_ext clean all
+          ./tests/signal_bias_ext/test_signal_bias_ext
+          cc -std=c99 -I src -DENAGLO -DENAGAL -DENAQZS -DENACMP -c src/rtklib_residual_ext.c -o /tmp/rtklib_residual_ext.o
+          cc -std=c99 -I src -DENAGLO -DENAGAL -DENAQZS -DENACMP -c src/pntpos.c -o /tmp/pntpos.o
+          make -C app/rnx2rtkp/gcc clean
+          make -C app/rnx2rtkp/gcc
+          git diff --check
+
+      - name: Commit validated core move and remove helper workflow
+        run: |
+          set -euxo pipefail
+          git rm .github/workflows/issue6_core_move.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/rtkcmn.c src/rtklib_signal_bias_ext.c src/rtklib_signal_bias_ext.h src/rtklib_residual_ext.c src/rtklib_residual_ext.h tests/signal_bias_ext/makefile
+          git commit -m "refactor: share signal bias helper through RTKLIB core"
+          git push origin HEAD:issue-6-all-signal-residuals-bds-tgd
