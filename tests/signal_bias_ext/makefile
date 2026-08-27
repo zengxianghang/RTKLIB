@@ -5,9 +5,8 @@ LDLIBS = -lm -lpthread
 
 all: test_signal_bias_ext
 
-test_signal_bias_ext: test_signal_bias_ext.c $(SRC)/rtklib_signal_bias_ext.c $(SRC)/rtkcmn.c
-	$(CC) $(CFLAGS) test_signal_bias_ext.c $(SRC)/rtklib_signal_bias_ext.c \
-	      $(SRC)/rtkcmn.c $(LDLIBS) -o $@
+test_signal_bias_ext: test_signal_bias_ext.c $(SRC)/rtkcmn.c
+	$(CC) $(CFLAGS) test_signal_bias_ext.c $(SRC)/rtkcmn.c $(LDLIBS) -o $@
 
 test: test_signal_bias_ext
 	./test_signal_bias_ext
