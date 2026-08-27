@@ -1266,6 +1266,12 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
     
     //decode BDS CNAV
     if(hdr->sys == SYS_CMP && (hdr->msg_type &(NAV_CNV1 | NAV_CNV2 | NAV_CNV3))) {
+        /* RINEX4 BDS CNV1/2/3 does not carry a BDT week field. Derive the
+         * continuous BDT week from Toc and combine it with the Orbit-3 Toe. */
+        eph->week = week;
+        eph->toes = data[11];
+        eph->toe = bdt2gpst(bdt2time(eph->week,eph->toes));
+        eph->toe = adjweek(eph->toe,eph->toc);
         eph->Adot = data[3];
         eph->delta_n0 = data[5];
         eph->delta_n0_dot = data[20];
@@ -1284,16 +1290,16 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
             eph->svh = data[32];
             eph->int_flag = data[33];
             eph->iodc = data[34];
-            eph->ttr=bdt2gpst(bdt2time(week,data[35])); /* bdt -> gpst */
-            eph->ttr=adjweek(eph->ttr,toc);
+            eph->ttr=bdt2gpst(bdt2time(eph->week,data[35])); /* bdt -> gpst */
+            eph->ttr=adjweek(eph->ttr,eph->toc);
             eph->iode = data[38];
         } else {
             eph->sva = data[27];
             eph->svh = data[28];
             eph->int_flag = data[29];
             eph->tgd[0] = data[30];
-            eph->ttr=bdt2gpst(bdt2time(week,data[31])); /* bdt -> gpst */
-            eph->ttr=adjweek(eph->ttr,toc);
+            eph->ttr=bdt2gpst(bdt2time(eph->week,data[31])); /* bdt -> gpst */
+            eph->ttr=adjweek(eph->ttr,eph->toc);
         }
     }
     
