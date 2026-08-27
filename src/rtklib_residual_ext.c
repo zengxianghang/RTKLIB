@@ -4,7 +4,7 @@
 #include <math.h>
 #include <string.h>
 
-#define RESIDUAL_EXT_REL_HUMI 0.7
+#define SQR(x) ((x)*(x))
 
 static double max_eph_age_sec(int sys)
 {

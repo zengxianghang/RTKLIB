@@ -45,14 +45,28 @@ static double varerr(const prcopt_t *opt, double el, int sys)
     return SQR(fact)*varr;
 }
 /* get tgd parameter (m) -----------------------------------------------------*/
-static double gettgd(int sat, const nav_t *nav)
+static double gettgd(gtime_t time, int sat, int index, const nav_t *nav)
 {
-    int i;
+    const eph_t *best=NULL;
+    double age,best_age=0.0,max_age=MAXDTOE;
+    int i,sys=satsys(sat,NULL);
+
+    if (index<0||index>=4) return 0.0;
+    if (sys==SYS_QZS) max_age=MAXDTOE_QZS;
+    else if (sys==SYS_GAL) max_age=MAXDTOE_GAL;
+    else if (sys==SYS_CMP) max_age=MAXDTOE_CMP;
+
     for (i=0;i<nav->n;i++) {
         if (nav->eph[i].sat!=sat) continue;
-        return CLIGHT*nav->eph[i].tgd[0];
+        age=fabs(timediff(nav->eph[i].toe,time));
+        if (age>max_age) continue;
+        if (!best||age<best_age||(fabs(age-best_age)<1E-9&&
+            timediff(nav->eph[i].toc,best->toc)>0.0)) {
+            best=nav->eph+i;
+            best_age=age;
+        }
     }
-    return 0.0;
+    return best?CLIGHT*best->tgd[index]:0.0;
 }
 /* psendorange with code bias correction -------------------------------------*/
 static double prange(const obsd_t *obs, const nav_t *nav, const double *azel,
@@ -91,7 +105,7 @@ static double prange(const obsd_t *obs, const nav_t *nav, const double *azel,
     
     /* if no P1-P2 DCB, use TGD instead */
     if (P1_P2==0.0&&(sys&(SYS_GPS|SYS_GAL|SYS_QZS))) {
-        P1_P2=(1.0-gamma)*gettgd(obs->sat,nav);
+        P1_P2=(1.0-gamma)*gettgd(obs->time,obs->sat,0,nav);
     }
     if (opt->ionoopt==IONOOPT_IFLC) { /* dual-frequency */
         
@@ -106,7 +120,14 @@ static double prange(const obsd_t *obs, const nav_t *nav, const double *azel,
         
         if (P1==0.0) return 0.0;
         if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
-        PC=P1-P1_P2/(1.0-gamma);
+        if (P1_P2==0.0&&sys==SYS_CMP) {
+            /* BDS-SIS-ICD: B1I/B2I clocks require TGD1/TGD2; B3I is
+             * the broadcast-clock reference and needs no extra correction. */
+            if      (obs->code[i]==CODE_L2I) PC=P1-gettgd(obs->time,obs->sat,0,nav);
+            else if (obs->code[i]==CODE_L7I) PC=P1-gettgd(obs->time,obs->sat,1,nav);
+            else                             PC=P1;
+        }
+        else PC=P1-P1_P2/(1.0-gamma);
     }
     if (opt->sateph==EPHOPT_SBAS) PC-=P1_C1; /* sbas clock based C1 */
     
