@@ -33,19 +33,7 @@ jobs:
         run: |
           python tools/apply_issue6_glo_l3oc_patch.py
           sed -i 's/expected_clk,1E-15/expected_clk,1E-14/' tests/residual_ext/test_glo_l3oc_residual.c
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('tests/residual_ext/test_glo_l3oc_residual.c')
-          s=p.read_text()
-          s=s.replace('if (!sat) return 1;', 'if (!sat) { fprintf(stderr,"G3 satellite unavailable line=%d\\n",__LINE__); return 1; }')
-          s=s.replace('if (stat!=1) return 1;', 'if (stat!=1) { fprintf(stderr,"G3 state stat=%d line=%d\\n",stat,__LINE__); return 1; }')
-          s=s.replace('if (!(range>0.0)) return 1;', 'if (!(range>0.0)) { fprintf(stderr,"G3 geodist invalid line=%d range=%.15f\\n",__LINE__,range); return 1; }')
-          s=s.replace('if (stat!=1||info.message_type!=NAV_L3OC||\n        !expect_close("G3 pilot code bias",bias,-CLIGHT*geph.isc_l3ocp,1E-9)) return 1;', 'if (stat!=1||info.message_type!=NAV_L3OC) { fprintf(stderr,"G3 bias status stat=%d type=%d line=%d\\n",stat,info.message_type,__LINE__); return 1; }\n    if (!expect_close("G3 pilot code bias",bias,-CLIGHT*geph.isc_l3ocp,1E-9)) return 1;')
-          s=s.replace('    stat=rtklib_rescode_signal_ext(&obs,&nav,&opt,rr,0.0,0.0,NAV_L3OC,\n', '    satazel(pos,e,azel); fprintf(stderr,"G3 pre-code el=%.9f svh=%d exclude=%d navsys=%d\\n",azel[1],svh,satexclude(sat,svh,&opt),opt.navsys);\n    stat=rtklib_rescode_signal_ext(&obs,&nav,&opt,rr,0.0,0.0,NAV_L3OC,\n')
-          s=s.replace('if (stat!=1||info.message_type!=NAV_L3OC||\n        !expect_close("G3 truth-state code residual",residual,0.0,1E-4)) return 1;', 'if (stat!=1||info.message_type!=NAV_L3OC) { fprintf(stderr,"G3 code residual status stat=%d type=%d line=%d\\n",stat,info.message_type,__LINE__); return 1; }\n    if (!expect_close("G3 truth-state code residual",residual,0.0,1E-4)) return 1;')
-          s=s.replace('if (stat!=1||!expect_close("G3 truth-state Doppler residual",residual,0.0,5E-4)) return 1;', 'if (stat!=1) { fprintf(stderr,"G3 Doppler residual status stat=%d line=%d\\n",stat,__LINE__); return 1; }\n    if (!expect_close("G3 truth-state Doppler residual",residual,0.0,5E-4)) return 1;')
-          p.write_text(s)
-          PY
+          sed -i '/opt.tropopt=TROPOPT_OFF;/a\    opt.navsys=SYS_GLO;' tests/residual_ext/test_glo_l3oc_residual.c
 
       - name: Check patch whitespace
         run: git diff --check
