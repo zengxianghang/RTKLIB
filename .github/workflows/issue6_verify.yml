@@ -1,0 +1,18 @@
+name: issue6-verify
+
+on:
+  push:
+    branches:
+      - issue-6-all-signal-residuals-bds-tgd
+
+permissions:
+  contents: read
+
+jobs:
+  gcc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -C tests/signal_bias_ext clean test
+      - run: make -C tests/residual_ext clean test
+      - run: gcc -std=c99 -Wall -Wextra -pedantic -Isrc -c src/pntpos.c -o /tmp/pntpos.o
