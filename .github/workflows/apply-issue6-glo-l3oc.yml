@@ -41,6 +41,19 @@ jobs:
           s=s.replace('if (stat!=1) return 1;', 'if (stat!=1) { fprintf(stderr,"G3 state stat=%d line=%d\\n",stat,__LINE__); return 1; }')
           s=s.replace('if (!(range>0.0)) return 1;', 'if (!(range>0.0)) { fprintf(stderr,"G3 geodist invalid line=%d range=%.15f\\n",__LINE__,range); return 1; }')
           s=s.replace('if (stat!=1||info.message_type!=NAV_L3OC||\n        !expect_close("G3 pilot code bias",bias,-CLIGHT*geph.isc_l3ocp,1E-9)) return 1;', 'if (stat!=1||info.message_type!=NAV_L3OC) { fprintf(stderr,"G3 bias status stat=%d type=%d line=%d\\n",stat,info.message_type,__LINE__); return 1; }\n    if (!expect_close("G3 pilot code bias",bias,-CLIGHT*geph.isc_l3ocp,1E-9)) return 1;')
+          s=s.replace('    stat=rtklib_rescode_signal_ext(&obs,&nav,&opt,rr,0.0,0.0,NAV_L3OC,\n', '''    {
+        double dbg_pos[3],dbg_azel[2],dbg_dion=0.0,dbg_vion=0.0,dbg_dtrp=0.0,dbg_vtrp=0.0;
+        double dbg_e[3];
+        double dbg_r=geodist(rs,rr,dbg_e);
+        ecef2pos(rr,dbg_pos);
+        satazel(dbg_pos,dbg_e,dbg_azel);
+        fprintf(stderr,"G3 pre-code r=%.3f el=%.9f svh=%d exclude=%d ion=%d trop=%d\\n",
+                dbg_r,dbg_azel[1],svh,satexclude(sat,svh,&opt),
+                ionocorr(obs.time,&nav,sat,dbg_pos,dbg_azel,opt.ionoopt,&dbg_dion,&dbg_vion),
+                tropcorr(obs.time,&nav,dbg_pos,dbg_azel,opt.tropopt,&dbg_dtrp,&dbg_vtrp));
+    }
+    stat=rtklib_rescode_signal_ext(&obs,&nav,&opt,rr,0.0,0.0,NAV_L3OC,
+''')
           s=s.replace('if (stat!=1||info.message_type!=NAV_L3OC||\n        !expect_close("G3 truth-state code residual",residual,0.0,1E-4)) return 1;', 'if (stat!=1||info.message_type!=NAV_L3OC) { fprintf(stderr,"G3 code residual status stat=%d type=%d line=%d\\n",stat,info.message_type,__LINE__); return 1; }\n    if (!expect_close("G3 truth-state code residual",residual,0.0,1E-4)) return 1;')
           s=s.replace('if (stat!=1||!expect_close("G3 truth-state Doppler residual",residual,0.0,5E-4)) return 1;', 'if (stat!=1) { fprintf(stderr,"G3 Doppler residual status stat=%d line=%d\\n",stat,__LINE__); return 1; }\n    if (!expect_close("G3 truth-state Doppler residual",residual,0.0,5E-4)) return 1;')
           p.write_text(s)
