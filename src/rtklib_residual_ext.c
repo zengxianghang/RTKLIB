@@ -67,7 +67,7 @@ static int eph_supports_code(int sys, int type, unsigned char code)
 }
 
 static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
-                                      const nav_t *nav, int *message_type)
+                                      int required_message_type, const nav_t *nav, int *message_type)
 {
     const eph_t *best=NULL;
     double best_age=0.0,max_age;
@@ -80,6 +80,7 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
         double age;
         if (nav->eph[i].sat!=sat) continue;
         type=canonical_message_type(nav->eph+i,sys);
+        if (required_message_type&&type!=required_message_type) continue;
         if (!eph_supports_code(sys,type,code)) continue;
         age=fabs(timediff(nav->eph[i].toe,time));
         if (age>max_age) continue;
@@ -120,7 +121,7 @@ static double freq_ratio_squared(double reference_hz, double signal_hz)
 }
 
 int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
-                                const nav_t *nav, double *raw_code_bias_m,
+                                int required_message_type, const nav_t *nav, double *raw_code_bias_m,
                                 rtklib_signal_bias_info_ext_t *info)
 {
     const eph_t *eph;
@@ -150,7 +151,7 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
         return 1;
     }
 
-    eph=select_signal_eph(time,sat,code,nav,&type);
+    eph=select_signal_eph(time,sat,code,required_message_type,nav,&type);
     if (!eph) return 0;
 
     if (sys==SYS_GPS||sys==SYS_QZS) {
@@ -217,7 +218,7 @@ int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
                               const double receiver_ecef_m[3],
                               double receiver_clock_bias_m,
                               double receiver_system_bias_m,
-                              double wavelength_m,
+                              int required_message_type, double wavelength_m,
                               double *residual_m, double azel_rad[2],
                               rtklib_signal_bias_info_ext_t *bias_info)
 {
@@ -233,7 +234,7 @@ int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
     ecef2pos(receiver_ecef_m,pos);
     if (satazel(pos,e,azel)<opt->elmin||satexclude(obs->sat,svh[0],opt)) return 0;
 
-    stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,obs->code[0],nav,
+    stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,obs->code[0],required_message_type,nav,
                                      &code_bias,bias_info);
     if (stat<=0) return stat;
 
