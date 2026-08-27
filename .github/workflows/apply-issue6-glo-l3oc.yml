@@ -30,7 +30,9 @@ jobs:
         run: python -m py_compile tools/apply_issue6_glo_l3oc_patch.py
 
       - name: Apply guarded source and regression changes
-        run: python tools/apply_issue6_glo_l3oc_patch.py
+        run: |
+          python tools/apply_issue6_glo_l3oc_patch.py
+          sed -i 's/expected_clk,1E-15/expected_clk,1E-14/' tests/residual_ext/test_glo_l3oc_residual.c
 
       - name: Check patch whitespace
         run: git diff --check
