@@ -1,0 +1,28 @@
+name: issue6-verify
+
+on:
+  push:
+    branches: [issue-6-all-signal-residuals-bds-tgd]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-all-signal-residuals-bds-tgd
+      - name: Test signal-specific broadcast biases
+        run: make -C tests/signal_bias_ext clean test
+      - name: Test truth-state code and Doppler residuals
+        run: make -C tests/residual_ext clean test
+      - name: Remove temporary workflow after success
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/issue6_verify.yml
+          git commit -m 'ci: remove issue 6 verification workflow'
+          git push origin HEAD:issue-6-all-signal-residuals-bds-tgd
