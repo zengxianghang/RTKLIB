@@ -108,8 +108,8 @@ int main(void)
     for (i=0;i<5;i++) {
         stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
                                      &nav,rs,dts,&var,&svh,&info);
-        if (stat!=1||info.message_type!=NAV_LNAV) {
-            fprintf(stderr,"generic state did not select nearest LNAV ephemeris\n");
+        if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11) {
+            fprintf(stderr,"generic state did not mirror stock equal-age tie selection\n");
             return 1;
         }
         range=geodist(rs,rr,e);
@@ -133,7 +133,7 @@ int main(void)
     obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
                                   0,wavelength,&residual,azel);
-    if (stat!=1||info.message_type!=NAV_LNAV||
+    if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11||
         !expect_close("generic-state L1C Doppler residual",residual,0.0,5E-4)) return 1;
 
     puts("residual_ext: PASS");
