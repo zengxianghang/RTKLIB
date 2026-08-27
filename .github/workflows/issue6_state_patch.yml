@@ -1,0 +1,160 @@
+name: issue6-state-patch
+on:
+  push:
+    branches: [issue-6-all-signal-residuals-bds-tgd]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-all-signal-residuals-bds-tgd
+      - name: Add message-family-aware state propagation and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/rtkcmn.c')
+          s=p.read_text()
+          if 'int rtklib_signal_state_ext(' not in s:
+              s += r'''
+
+/* signal/message-family broadcast satellite state ---------------------------*/
+int rtklib_signal_state_ext(gtime_t receive_time, double pseudorange_m,
+                            int sat, unsigned char code,
+                            int required_message_mask, const nav_t *nav,
+                            double rs[6], double dts[2], double *var,
+                            int *svh, rtklib_signal_bias_info_ext_t *info)
+{
+    const eph_t *eph=NULL;
+    const geph_t *geph=NULL;
+    double rst[3]={0},dtst=0.0,vart=0.0,dt,age,best_age=0.0;
+    gtime_t transmit_time;
+    int i,sys,type=0;
+
+    if (!nav||!rs||!dts||!var||!svh||sat<=0||sat>MAXSAT||
+        code==CODE_NONE||!isfinite(pseudorange_m)||pseudorange_m<=0.0) return -1;
+
+    sys=satsys(sat,NULL);
+    if (sys==SYS_NONE) return -1;
+    if (info) memset(info,0,sizeof(*info));
+
+    if (sys==SYS_GLO) {
+        for (i=0;i<nav->ng;i++) {
+            int candidate_type;
+            if (nav->geph[i].sat!=sat) continue;
+            candidate_type=nav->geph[i].hdr.msg_type?nav->geph[i].hdr.msg_type:NAV_FDMA;
+            if (required_message_mask&&!(candidate_type&required_message_mask)) continue;
+            age=fabs(timediff(nav->geph[i].toe,receive_time));
+            if (age>MAXDTOE_GLO) continue;
+            if (!geph||age<best_age||(fabs(age-best_age)<1E-9&&
+                timediff(nav->geph[i].tof,geph->tof)>0.0)) {
+                geph=nav->geph+i;
+                best_age=age;
+                type=candidate_type;
+            }
+        }
+        if (!geph) return 0;
+    }
+    else {
+        eph=select_signal_eph(receive_time,sat,code,required_message_mask,
+                              nav,&type);
+        if (!eph) return 0;
+    }
+
+    transmit_time=timeadd(receive_time,-pseudorange_m/CLIGHT);
+    if (geph) dt=geph2clk(transmit_time,geph);
+    else      dt=eph2clk (transmit_time,eph );
+    transmit_time=timeadd(transmit_time,-dt);
+
+    if (geph) {
+        geph2pos(transmit_time,geph,rs,dts,var);
+        geph2pos(timeadd(transmit_time,1E-3),geph,rst,&dtst,&vart);
+        *svh=geph->svh;
+        if (info) {
+            info->system=sys;
+            info->message_type=type;
+            info->iode=geph->iode;
+        }
+    }
+    else {
+        eph2pos(transmit_time,eph,rs,dts,var);
+        eph2pos(timeadd(transmit_time,1E-3),eph,rst,&dtst,&vart);
+        *svh=eph->svh;
+        if (info) {
+            info->system=sys;
+            info->message_type=type;
+            info->iode=eph->iode;
+        }
+    }
+    for (i=0;i<3;i++) rs[i+3]=(rst[i]-rs[i])/1E-3;
+    dts[1]=(dtst-dts[0])/1E-3;
+    return 1;
+}
+'''
+              p.write_text(s)
+          PY
+
+          cat >/tmp/test_signal_state.c <<'C'
+          #include "rtklib.h"
+          #include "rtklib_signal_bias_ext.h"
+          #include <math.h>
+          #include <stdio.h>
+          #include <string.h>
+
+          static void init_eph(eph_t *eph,int sat,gtime_t t,int type,int iode,double m0)
+          {
+              memset(eph,0,sizeof(*eph));
+              eph->sat=sat; eph->toe=eph->toc=eph->ttr=t;
+              eph->hdr.msg_type=type; eph->iode=iode;
+              eph->A=26560E3; eph->e=0.01; eph->i0=0.94;
+              eph->OMG0=1.0; eph->omg=0.5; eph->M0=m0;
+          }
+
+          int main(void)
+          {
+              nav_t nav={0}; eph_t eph[2]; rtklib_signal_bias_info_ext_t info;
+              gtime_t t=gpst2time(2300,100000.0);
+              double rs[6],dts[2],var; int svh=0;
+              int sat=satno(SYS_GPS,3),stat;
+              if (!sat) return 1;
+              init_eph(eph+0,sat,t,NAV_LNAV,10,0.1);
+              init_eph(eph+1,sat,t,NAV_CNAV,11,1.1);
+              nav.eph=eph; nav.n=nav.nmax=2;
+              stat=rtklib_signal_state_ext(t,2.4E7,sat,CODE_L2S,NAV_CNAV,
+                                           &nav,rs,dts,&var,&svh,&info);
+              if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11||
+                  !isfinite(rs[0])||!isfinite(rs[3])||!isfinite(dts[0])||
+                  !isfinite(dts[1])) {
+                  fprintf(stderr,"signal state did not select CNAV family\n");
+                  return 1;
+              }
+              stat=rtklib_signal_state_ext(t,2.4E7,sat,CODE_L1C,NAV_LNAV,
+                                           &nav,rs,dts,&var,&svh,&info);
+              if (stat!=1||info.message_type!=NAV_LNAV||info.iode!=10) {
+                  fprintf(stderr,"signal state did not select LNAV family\n");
+                  return 1;
+              }
+              puts("signal_state_ext: PASS");
+              return 0;
+          }
+          C
+
+          CFLAGS='-O2 -std=c99 -Wall -Wextra -pedantic -ffunction-sections -fdata-sections -Isrc -DENAGLO -DENAQZS -DENAGAL -DENACMP -DNFREQ=3'
+          gcc $CFLAGS -c src/rtkcmn.c -o /tmp/rtkcmn.o
+          gcc $CFLAGS -c src/rtklib_residual_ext.c -o /tmp/residual.o
+          gcc $CFLAGS -c src/pntpos.c -o /tmp/pntpos.o
+          gcc $CFLAGS /tmp/test_signal_state.c src/rtkcmn.c src/ephemeris.c -Wl,--gc-sections -lm -lpthread -o /tmp/test_signal_state
+          /tmp/test_signal_state
+          make -C tests/signal_bias_ext clean test
+          git diff --check
+
+          git rm .github/workflows/issue6_state_patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/rtkcmn.c src/rtklib_signal_bias_ext.h src/rtklib_residual_ext.h src/rtklib_residual_ext.c
+          git commit -m 'fix: align residual satellite state with signal NAV family'
+          git push origin HEAD:issue-6-all-signal-residuals-bds-tgd
