@@ -2,8 +2,6 @@
 
 #include <math.h>
 
-#define SQR(x) ((x)*(x))
-
 int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
                               const prcopt_t *opt,
                               const double receiver_ecef_m[3],
@@ -13,17 +11,20 @@ int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
                               double *residual_m, double azel_rad[2],
                               rtklib_signal_bias_info_ext_t *bias_info)
 {
-    double rs[6]={0},dts[2]={0},vare[1]={0},e[3],pos[3],azel[2];
+    double rs[6]={0},dts[2]={0},vare=0.0,e[3],pos[3],azel[2];
     double r,code_bias,dion=0.0,vion=0.0,dtrp=0.0,vtrp=0.0,p;
-    int svh[1]={0},stat;
+    int svh=0,stat;
 
     if (!obs||!nav||!opt||!receiver_ecef_m||!residual_m||
         !isfinite(wavelength_m)||wavelength_m<=0.0||obs->P[0]<=0.0) return -1;
 
-    satposs(obs->time,obs,1,nav,opt->sateph,rs,dts,vare,svh);
+    stat=rtklib_signal_state_ext(obs->time,obs->P[0],obs->sat,obs->code[0],
+                                 required_message_mask,nav,rs,dts,&vare,&svh,
+                                 NULL);
+    if (stat<=0) return stat;
     if ((r=geodist(rs,receiver_ecef_m,e))<=0.0) return 0;
     ecef2pos(receiver_ecef_m,pos);
-    if (satazel(pos,e,azel)<opt->elmin||satexclude(obs->sat,svh[0],opt)) return 0;
+    if (satazel(pos,e,azel)<opt->elmin||satexclude(obs->sat,svh,opt)) return 0;
 
     stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,obs->code[0],
                                      required_message_mask,nav,&code_bias,
@@ -50,22 +51,25 @@ int rtklib_resdop_signal_ext(const obsd_t *obs, const nav_t *nav,
                              const double receiver_ecef_m[3],
                              const double receiver_velocity_ecef_mps[3],
                              double receiver_clock_drift_mps,
-                             double wavelength_m,
+                             int required_message_mask, double wavelength_m,
                              double *residual_mps, double azel_rad[2])
 {
-    double rs[6]={0},dts[2]={0},vare[1]={0},e[3],pos[3],azel[2];
+    double rs[6]={0},dts[2]={0},vare=0.0,e[3],pos[3],azel[2];
     double relative_velocity[3],rate,r;
-    int svh[1]={0},j;
+    int svh=0,j,stat;
 
     if (!obs||!nav||!opt||!receiver_ecef_m||!receiver_velocity_ecef_mps||
         !residual_mps||!isfinite(wavelength_m)||wavelength_m<=0.0||
         !isfinite(obs->D[0])||obs->P[0]<=0.0) return -1;
 
-    satposs(obs->time,obs,1,nav,opt->sateph,rs,dts,vare,svh);
+    stat=rtklib_signal_state_ext(obs->time,obs->P[0],obs->sat,obs->code[0],
+                                 required_message_mask,nav,rs,dts,&vare,&svh,
+                                 NULL);
+    if (stat<=0) return stat;
     if ((r=geodist(rs,receiver_ecef_m,e))<=0.0) return 0;
     (void)r;
     ecef2pos(receiver_ecef_m,pos);
-    if (satazel(pos,e,azel)<opt->elmin||satexclude(obs->sat,svh[0],opt)) return 0;
+    if (satazel(pos,e,azel)<opt->elmin||satexclude(obs->sat,svh,opt)) return 0;
     if (norm(rs+3,3)<=0.0) return 0;
 
     for (j=0;j<3;j++) {
