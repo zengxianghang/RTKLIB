@@ -644,7 +644,13 @@ typedef struct {        /* GLONASS broadcast ephemeris type */
     double vel[3];      /* satellite velocity (ecef) (m/s) */
     double acc[3];      /* satellite acceleration (ecef) (m/s^2) */
     double taun,gamn;   /* SV clock bias (s)/relative freq bias */
+    double beta;        /* GLONASS CDMA half rate of relative freq bias (1/s) */
     double dtaun;       /* delay between L1 and L2 (s) */
+    double tgd_l2ocp;   /* RINEX4 L1OC TGD_L2OCp (s) */
+    double isc_l3ocp;   /* RINEX4 L3OC ISC_L3OCp = T_L3OCp-T_L3OCd (s) */
+    int data_validity;  /* RINEX4 GLONASS CDMA data-validity flag */
+    double pc[3];       /* GLONASS CDMA antenna phase-centre offsets (m) */
+    double ttm;         /* RINEX4 raw transmission time in UTC week (s) */
     nav_data_hdr_t hdr;
 } geph_t;
 

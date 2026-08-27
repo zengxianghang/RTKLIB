@@ -7,15 +7,23 @@ SOURCES = test_residual_ext.c unused_correction_stubs.c $(SRC)/rtkcmn.c \
           $(SRC)/ephemeris.c $(SRC)/pntpos.c $(SRC)/rtklib_signal_state_ext.c \
           $(SRC)/rtklib_residual_ext.c
 
-all: test_residual_ext
+all: test_residual_ext test_glo_l3oc_residual
 
 test_residual_ext: $(SOURCES)
 	$(CC) $(CFLAGS) $(SOURCES) $(LDFLAGS) $(LDLIBS) -o $@
 
-test: test_residual_ext
+test_glo_l3oc_residual: test_glo_l3oc_residual.c unused_correction_stubs.c $(SRC)/rtkcmn.c \
+          $(SRC)/ephemeris.c $(SRC)/pntpos.c $(SRC)/rtklib_signal_state_ext.c \
+          $(SRC)/rtklib_residual_ext.c
+	$(CC) $(CFLAGS) test_glo_l3oc_residual.c unused_correction_stubs.c $(SRC)/rtkcmn.c \
+          $(SRC)/ephemeris.c $(SRC)/pntpos.c $(SRC)/rtklib_signal_state_ext.c \
+          $(SRC)/rtklib_residual_ext.c $(LDFLAGS) $(LDLIBS) -o $@
+
+test: all
 	./test_residual_ext
+	./test_glo_l3oc_residual
 
 clean:
-	rm -f test_residual_ext test_residual_ext.exe
+	rm -f test_residual_ext test_residual_ext.exe test_glo_l3oc_residual test_glo_l3oc_residual.exe
 
 .PHONY: all test clean

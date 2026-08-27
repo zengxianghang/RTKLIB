@@ -4013,21 +4013,29 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
 }
 
 static const geph_t *select_signal_geph(gtime_t time, int sat,
-                                        const nav_t *nav)
+                                        unsigned char code,
+                                        int required_message_mask,
+                                        const nav_t *nav, int *message_type)
 {
     const geph_t *best=NULL;
     double best_age=0.0;
-    int i;
+    int i,type,compatible;
     if (!nav) return NULL;
     for (i=0;i<nav->ng;i++) {
         double age;
         if (nav->geph[i].sat!=sat) continue;
+        type=nav->geph[i].hdr.msg_type?nav->geph[i].hdr.msg_type:NAV_FDMA;
+        compatible=code==CODE_L3Q?type==NAV_L3OC:
+                   (code==CODE_L1C||code==CODE_L2C)?type==NAV_FDMA:0;
+        if (!compatible) continue;
+        if (required_message_mask&&!(type&required_message_mask)) continue;
         age=fabs(timediff(nav->geph[i].toe,time));
         if (age>MAXDTOE_GLO) continue;
         if (!best||age<best_age||(fabs(age-best_age)<1E-9&&
             timediff(nav->geph[i].tof,best->tof)>0.0)) {
             best=nav->geph+i;
             best_age=age;
+            if (message_type) *message_type=type;
         }
     }
     return best;
@@ -4055,14 +4063,15 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
     if (info) memset(info,0,sizeof(*info));
 
     if (sys==SYS_GLO) {
-        geph=select_signal_geph(time,sat,nav);
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,&type);
         if (!geph) return 0;
         if (code==CODE_L1C) bias=0.0;
         else if (code==CODE_L2C) bias=CLIGHT*geph->dtaun;
+        else if (code==CODE_L3Q) bias=-CLIGHT*geph->isc_l3ocp;
         else return 0;
         if (info) {
             info->system=sys;
-            info->message_type=NAV_FDMA;
+            info->message_type=type;
             info->iode=geph->iode;
             info->raw_code_bias_m=bias;
         }
@@ -4152,23 +4161,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
     if (info) memset(info,0,sizeof(*info));
 
     if (sys==SYS_GLO) {
-        for (i=0;i<nav->ng;i++) {
-            int candidate_type,compatible;
-            if (nav->geph[i].sat!=sat) continue;
-            candidate_type=nav->geph[i].hdr.msg_type?nav->geph[i].hdr.msg_type:NAV_FDMA;
-            compatible=code==CODE_L3Q?candidate_type==NAV_L3OC:
-                       (code==CODE_L1C||code==CODE_L2C)?candidate_type==NAV_FDMA:0;
-            if (!compatible) continue;
-            if (required_message_mask&&!(candidate_type&required_message_mask)) continue;
-            age=fabs(timediff(nav->geph[i].toe,time));
-            if (age>MAXDTOE_GLO) continue;
-            if (!geph||age<best_age||(fabs(age-best_age)<1E-9&&
-                timediff(nav->geph[i].tof,geph->tof)>0.0)) {
-                geph=nav->geph+i;
-                best_age=age;
-                type=candidate_type;
-            }
-        }
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,&type);
         if (!geph) return 0;
         *geph_out=*geph;
         if (info) {

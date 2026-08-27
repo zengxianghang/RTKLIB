@@ -1359,6 +1359,58 @@ static int decode_geph(double ver, int sat, gtime_t toc, double *data,
     }
     return 1;
 }
+/* decode RINEX4 GLONASS CDMA ephemeris -----------------------------------*/
+static int decode_rnx4_geph(int sat, gtime_t toc, const double *data,
+                            const nav_data_hdr_t *hdr, geph_t *geph)
+{
+    geph_t geph0={0};
+    gtime_t tof;
+    double tow;
+    int week;
+
+    if (!hdr||satsys(sat,NULL)!=SYS_GLO||
+        (hdr->msg_type!=NAV_L1OC&&hdr->msg_type!=NAV_L3OC)) {
+        rtktrace(2,"glonass cdma ephemeris error: sat=%2d msg=%d\n",
+                 sat,hdr?hdr->msg_type:0);
+        return 0;
+    }
+    *geph=geph0;
+    geph->sat=sat;
+
+    /* RINEX4 CDMA Toc is UTC and is the clock reference epoch. Do not apply
+       the legacy FDMA 15-minute rounding. t_tm is the last field (UTC week). */
+    tow=time2gpst(toc,&week);
+    geph->toe=utc2gpst(toc);
+    tof=adjweek(gpst2time(week,data[34]),toc);
+    geph->tof=utc2gpst(tof);
+    geph->ttm=data[34];
+
+    /* There is no legacy 7-bit tb/IODE field in the CDMA RINEX record. Keep a
+       deterministic epoch tag for diagnostics/selector provenance. */
+    geph->iode=(int)(fmod(tow+10800.0,86400.0)/90.0+0.5);
+
+    geph->taun=-data[0];
+    geph->gamn= data[1];
+    geph->beta= data[2];
+
+    geph->pos[0]=data[ 3]*1E3; geph->vel[0]=data[ 4]*1E3; geph->acc[0]=data[ 5]*1E3;
+    geph->pos[1]=data[ 7]*1E3; geph->vel[1]=data[ 8]*1E3; geph->acc[1]=data[ 9]*1E3;
+    geph->pos[2]=data[11]*1E3; geph->vel[2]=data[12]*1E3; geph->acc[2]=data[13]*1E3;
+
+    geph->svh=(int)data[6];
+    geph->data_validity=(int)data[10];
+    geph->frq=0; /* CDMA: common carrier, no FDMA channel number */
+    geph->flag=(int)data[16]; /* RINEX4 RT/RE source flags */
+    geph->age=(int)data[17];  /* AODE, retained for diagnostics */
+    geph->sva=(int)data[31];  /* orbit accuracy index */
+    geph->pc[0]=data[28];
+    geph->pc[1]=data[29];
+    geph->pc[2]=data[30];
+
+    if (hdr->msg_type==NAV_L1OC) geph->tgd_l2ocp=data[14];
+    else                         geph->isc_l3ocp=data[14];
+    return 1;
+}
 /* decode geo ephemeris ------------------------------------------------------*/
 static int decode_seph(double ver, int sat, gtime_t toc, double *data,
                        seph_t *seph)
@@ -1794,7 +1846,10 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
     char buff[MAXRNXLEN],id[8]="",*p;
    
     int max_data_cnt = 31;
-    if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNAV) max_data_cnt = 35;
+    if(hdr->sys == SYS_GLO &&
+       (hdr->msg_type == NAV_L1OC || hdr->msg_type == NAV_L3OC)) max_data_cnt = 35;
+    else if(hdr->sys == SYS_GLO) max_data_cnt = 19;
+    else if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNAV) max_data_cnt = 35;
     else if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNV2) max_data_cnt = 39;
     else if(hdr->sys == SYS_CMP && (hdr->msg_type & ( NAV_CNV1 | NAV_CNV2))) max_data_cnt = 39;
     else if(hdr->sys == SYS_CMP && hdr->msg_type == NAV_CNV3) max_data_cnt = 35;
@@ -1830,9 +1885,12 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
                 data[i++]=str2num(p,0,19);
             }
             /* decode ephemeris */
-            if (sys==SYS_GLO&&i>=19) {
+            if (sys==SYS_GLO&&i>=max_data_cnt) {
                 if (!(mask&sys)) return 0;
                 *type=1;
+                if (hdr->msg_type==NAV_L1OC||hdr->msg_type==NAV_L3OC) {
+                    return decode_rnx4_geph(sat,toc,data,hdr,geph);
+                }
                 return decode_geph(ver,sat,toc,data,geph);
             }
             else if (sys==SYS_SBS&&i>=15) {

@@ -295,9 +295,9 @@ extern double geph2clk(gtime_t time, const geph_t *geph)
     t=timediff(time,geph->toe);
     
     for (i=0;i<2;i++) {
-        t-=-geph->taun+geph->gamn*t;
+        t-=-geph->taun+geph->gamn*t+geph->beta*t*t;
     }
-    return -geph->taun+geph->gamn*t;
+    return -geph->taun+geph->gamn*t+geph->beta*t*t;
 }
 /* glonass ephemeris to satellite position and clock bias ----------------------
 * compute satellite position and clock bias with glonass ephemeris
@@ -319,7 +319,7 @@ extern void geph2pos(gtime_t time, const geph_t *geph, double *rs, double *dts,
     
     t=timediff(time,geph->toe);
     
-    *dts=-geph->taun+geph->gamn*t;
+    *dts=-geph->taun+geph->gamn*t+geph->beta*t*t;
     
     for (i=0;i<3;i++) {
         x[i  ]=geph->pos[i];
