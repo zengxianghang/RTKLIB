@@ -3,9 +3,9 @@ CFLAGS = -O2 -std=c99 -Wall -Wextra -pedantic -ffunction-sections -fdata-section
          -I$(SRC) -DENAGLO -DENAQZS -DENAGAL -DENACMP -DNFREQ=3
 LDFLAGS = -Wl,--gc-sections
 LDLIBS = -lm -lpthread
-SOURCES = test_residual_ext.c $(SRC)/rtkcmn.c $(SRC)/ephemeris.c \
-          $(SRC)/pntpos.c $(SRC)/sbas.c $(SRC)/ionex.c $(SRC)/lex.c \
-          $(SRC)/rtklib_signal_state_ext.c $(SRC)/rtklib_residual_ext.c
+SOURCES = test_residual_ext.c unused_correction_stubs.c $(SRC)/rtkcmn.c \
+          $(SRC)/ephemeris.c $(SRC)/pntpos.c $(SRC)/rtklib_signal_state_ext.c \
+          $(SRC)/rtklib_residual_ext.c
 
 all: test_residual_ext
 
