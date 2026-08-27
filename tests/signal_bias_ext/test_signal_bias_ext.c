@@ -32,7 +32,8 @@ static void init_eph(eph_t *eph, int sat, gtime_t toe, int msg_type,
 int main(void)
 {
     nav_t nav={0};
-    eph_t eph[7];
+    eph_t eph[7],selected_eph;
+    geph_t selected_geph;
     rtklib_signal_bias_info_ext_t info;
     gtime_t t0=gpst2time(2300,100000.0);
     int c01=satno(SYS_CMP,1),c02=satno(SYS_CMP,2);
@@ -93,6 +94,14 @@ int main(void)
 
     stat=rtklib_signal_code_bias_ext(t0,c02,CODE_L7D,NAV_CNV3,&nav,&bias,&info);
     ok&=stat==1&&expect_close("B2b CNV3",bias,CLIGHT*9E-8);
+
+    /* A forced message family must still be compatible with the signal code. */
+    stat=rtklib_signal_ephemeris_ext(t0,c02,CODE_L1P,NAV_CNV3,&nav,
+                                     &selected_eph,&selected_geph,&info);
+    if (stat!=0) {
+        fprintf(stderr,"B1C incorrectly accepted CNV3 ephemeris\n");
+        ok=0;
+    }
 
     stat=rtklib_signal_code_bias_ext(timeadd(t0,1700.0),c02,CODE_L1P,NAV_CNV1,&nav,&bias,&info);
     ok&=stat==1&&info.iode==23&&expect_close("B1C epoch selection",bias,CLIGHT*10E-8);
