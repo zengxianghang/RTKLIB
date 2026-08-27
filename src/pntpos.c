@@ -18,6 +18,7 @@
 *           2015/03/19 1.5  fix bug on ionosphere correction for GLO and BDS
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
+#include "rtklib_signal_bias_ext.h"
 
 static const char rcsid[]="$Id:$";
 
@@ -105,31 +106,29 @@ static double prange(const obsd_t *obs, const nav_t *nav, const double *azel,
     P1_C1=nav->cbias[obs->sat-1][1];
     P2_C2=nav->cbias[obs->sat-1][2];
     
-    /* if no P1-P2 DCB, use TGD instead */
-    if (P1_P2==0.0&&(sys&(SYS_GPS|SYS_GAL|SYS_QZS))) {
-        P1_P2=(1.0-gamma)*gettgd(obs->time,obs->sat,0,nav);
-    }
     if (opt->ionoopt==IONOOPT_IFLC) { /* dual-frequency */
-        
+        /* Preserve the legacy external DCB/IFLC path. */
+        if (P1_P2==0.0&&(sys&(SYS_GPS|SYS_GAL|SYS_QZS))) {
+            P1_P2=(1.0-gamma)*gettgd(obs->time,obs->sat,0,nav);
+        }
         if (P1==0.0||P2==0.0) return 0.0;
         if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
         if (obs->code[j]==CODE_L2C) P2+=P2_C2; /* C2->P2 */
-        
-        /* iono-free combination */
         PC=(gamma*P1-P2)/(gamma-1.0);
     }
     else { /* single-frequency */
-        
+        double signal_bias=0.0;
+        int signal_bias_stat;
         if (P1==0.0) return 0.0;
-        if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
-        if (P1_P2==0.0&&sys==SYS_CMP) {
-            /* BDS-SIS-ICD: B1I/B2I clocks require TGD1/TGD2; B3I is
-             * the broadcast-clock reference and needs no extra correction. */
-            if      (obs->code[i]==CODE_L2I) PC=P1-gettgd(obs->time,obs->sat,0,nav);
-            else if (obs->code[i]==CODE_L7I) PC=P1-gettgd(obs->time,obs->sat,1,nav);
-            else                             PC=P1;
+        if (P1_P2!=0.0||(obs->code[i]==CODE_L1C&&P1_C1!=0.0)) {
+            if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
+            PC=P1-P1_P2/(1.0-gamma);
         }
-        else PC=P1-P1_P2/(1.0-gamma);
+        else {
+            signal_bias_stat=rtklib_signal_code_bias_ext(
+                obs->time,obs->sat,obs->code[i],0,nav,&signal_bias,NULL);
+            PC=signal_bias_stat>0?P1-signal_bias:P1;
+        }
     }
     if (opt->sateph==EPHOPT_SBAS) PC-=P1_C1; /* sbas clock based C1 */
     

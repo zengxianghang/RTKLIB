@@ -65,7 +65,7 @@ static int eph_supports_code(int sys, int type, unsigned char code)
 }
 
 static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
-                                      int required_message_type,
+                                      int required_message_mask,
                                       const nav_t *nav, int *message_type)
 {
     const eph_t *best=NULL;
@@ -79,7 +79,7 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
         double age;
         if (nav->eph[i].sat!=sat) continue;
         type=canonical_message_type(nav->eph+i,sys);
-        if (required_message_type&&type!=required_message_type) continue;
+        if (required_message_mask&&!(type&required_message_mask)) continue;
         if (!eph_supports_code(sys,type,code)) continue;
         age=fabs(timediff(nav->eph[i].toe,time));
         if (age>max_age) continue;
@@ -121,7 +121,7 @@ static double freq_ratio_squared(double reference_hz, double signal_hz)
 }
 
 int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
-                                int required_message_type, const nav_t *nav,
+                                int required_message_mask, const nav_t *nav,
                                 double *raw_code_bias_m,
                                 rtklib_signal_bias_info_ext_t *info)
 {
@@ -151,7 +151,7 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
         return 1;
     }
 
-    eph=select_signal_eph(time,sat,code,required_message_type,nav,&type);
+    eph=select_signal_eph(time,sat,code,required_message_mask,nav,&type);
     if (!eph) return 0;
 
     if (sys==SYS_GPS||sys==SYS_QZS) {

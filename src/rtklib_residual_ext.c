@@ -9,7 +9,7 @@ int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
                               const double receiver_ecef_m[3],
                               double receiver_clock_bias_m,
                               double receiver_system_bias_m,
-                              int required_message_type, double wavelength_m,
+                              int required_message_mask, double wavelength_m,
                               double *residual_m, double azel_rad[2],
                               rtklib_signal_bias_info_ext_t *bias_info)
 {
@@ -26,13 +26,13 @@ int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
     if (satazel(pos,e,azel)<opt->elmin||satexclude(obs->sat,svh[0],opt)) return 0;
 
     stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,obs->code[0],
-                                     required_message_type,nav,&code_bias,
+                                     required_message_mask,nav,&code_bias,
                                      bias_info);
     if (stat<=0) return stat;
 
     if (!ionocorr(obs->time,nav,obs->sat,pos,azel,opt->ionoopt,
                   &dion,&vion)) return 0;
-    dion*=SQR(wavelength_m/lam_carr[0]);
+    dion*=(wavelength_m/lam_carr[0])*(wavelength_m/lam_carr[0]);
     if (!tropcorr(obs->time,nav,pos,azel,opt->tropopt,&dtrp,&vtrp)) return 0;
 
     p=obs->P[0]-code_bias;

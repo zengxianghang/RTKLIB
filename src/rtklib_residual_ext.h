@@ -18,7 +18,7 @@ int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
                               const double receiver_ecef_m[3],
                               double receiver_clock_bias_m,
                               double receiver_system_bias_m,
-                              int required_message_type, double wavelength_m,
+                              int required_message_mask, double wavelength_m,
                               double *residual_m, double azel_rad[2],
                               rtklib_signal_bias_info_ext_t *bias_info);
 

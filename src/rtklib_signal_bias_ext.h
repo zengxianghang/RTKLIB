@@ -19,14 +19,14 @@ typedef struct {
  * pseudorange. The value follows the broadcast satellite-clock reference:
  * raw_P = common_range_terms + raw_code_bias_m.
  *
- * required_message_type=0 allows any message family compatible with code.
- * Otherwise only the requested RINEX-4 navigation message family is eligible.
+ * required_message_mask=0 allows any message family compatible with code.
+ * Otherwise any compatible NAV_* bit present in the mask is eligible.
  *
  * return: 1=available, 0=no applicable broadcast bias/message family,
  *        -1=invalid arguments.
  */
 int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
-                                int required_message_type, const nav_t *nav,
+                                int required_message_mask, const nav_t *nav,
                                 double *raw_code_bias_m,
                                 rtklib_signal_bias_info_ext_t *info);
 

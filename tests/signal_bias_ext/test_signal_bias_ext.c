@@ -69,6 +69,14 @@ int main(void)
     stat=rtklib_signal_code_bias_ext(timeadd(t0,3550.0),c01,CODE_L2I,0,&nav,&bias,&info);
     ok&=stat==1&&info.iode==11&&expect_close("B1I epoch selects legacy",bias,CLIGHT*3E-8);
 
+    /* A legacy-family mask accepts D1/D2/D1D2 but must reject the closer CNAV record. */
+    eph[0].hdr.msg_type=NAV_D1;
+    stat=rtklib_signal_code_bias_ext(timeadd(t0,10.0),c01,CODE_L2I,
+        NAV_D1|NAV_D2|NAV_D1D2,&nav,&bias,&info);
+    ok&=stat==1&&info.iode==10&&
+        expect_close("B1I legacy mask",bias,CLIGHT*1E-8);
+    eph[0].hdr.msg_type=NAV_D1D2;
+
     stat=rtklib_signal_code_bias_ext(t0,c02,CODE_L1P,NAV_CNV1,&nav,&bias,&info);
     ok&=stat==1&&info.message_type==NAV_CNV1&&
         expect_close("B1C CNV1",bias,CLIGHT*5E-8);
