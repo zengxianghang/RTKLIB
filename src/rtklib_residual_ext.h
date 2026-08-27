@@ -25,8 +25,10 @@ int rtklib_rescode_signal_ext(const obsd_t *obs, const nav_t *nav,
 /*
  * Evaluate one signal with the RTKLIB resdop equation at a fixed receiver
  * state. obs->D[0] is Doppler in Hz and wavelength_m is the actual signal
- * wavelength, including GLONASS FCN dependence where applicable. The message
- * mask constrains satellite state selection to the signal's NAV family.
+ * wavelength, including GLONASS FCN dependence where applicable. A nonzero
+ * message mask constrains satellite-state selection to a NAV family compatible
+ * with obs->code[0]. A zero mask selects the nearest generic broadcast state,
+ * allowing Doppler validation when signal-specific code-bias NAV is absent.
  */
 int rtklib_resdop_signal_ext(const obsd_t *obs, const nav_t *nav,
                              const prcopt_t *opt,

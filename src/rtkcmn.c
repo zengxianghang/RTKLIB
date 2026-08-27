@@ -3985,6 +3985,33 @@ static int eph_supports_code(int sys, int type, unsigned char code)
     return 0;
 }
 
+static const eph_t *select_generic_eph(gtime_t time, int sat,
+                                       const nav_t *nav, int *message_type)
+{
+    const eph_t *best=NULL;
+    double best_age=0.0,max_age;
+    int i,sys,type;
+
+    if (!nav||(sys=satsys(sat,NULL))==SYS_NONE) return NULL;
+    max_age=max_eph_age_sec(sys);
+
+    for (i=0;i<nav->n;i++) {
+        double age;
+        if (nav->eph[i].sat!=sat) continue;
+        type=canonical_message_type(nav->eph+i,sys);
+        if (!type) continue;
+        age=fabs(timediff(nav->eph[i].toe,time));
+        if (age>max_age) continue;
+        if (!best||age<best_age||(fabs(age-best_age)<1E-9&&
+            timediff(nav->eph[i].toc,best->toc)>0.0)) {
+            best=nav->eph+i;
+            best_age=age;
+            if (message_type) *message_type=type;
+        }
+    }
+    return best;
+}
+
 static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
                                       int required_message_mask,
                                       const nav_t *nav, int *message_type)
@@ -4175,7 +4202,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
     }
 
     if (!required_message_mask) {
-        eph=select_signal_eph(time,sat,code,0,nav,&type);
+        eph=select_generic_eph(time,sat,nav,&type);
     }
     else {
         max_age=max_eph_age_sec(sys);

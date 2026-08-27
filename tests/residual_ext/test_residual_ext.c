@@ -101,6 +101,41 @@ int main(void)
                                   NAV_CNAV,wavelength,&residual,azel);
     if (stat!=1||!expect_close("truth-state Doppler residual",residual,0.0,5E-4)) return 1;
 
+    /* Doppler does not require the signal-specific code-bias NAV family. */
+    obs.code[0]=CODE_L1L;
+    obs.P[0]=2.4E7;
+    wavelength=CLIGHT/FREQ1;
+    for (i=0;i<5;i++) {
+        stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
+                                     &nav,rs,dts,&var,&svh,&info);
+        if (stat!=1||info.message_type!=NAV_LNAV) {
+            fprintf(stderr,"generic state did not select nearest LNAV ephemeris\n");
+            return 1;
+        }
+        range=geodist(rs,rr,e);
+        if (!(range>0.0)) return 1;
+        obs.P[0]=range-CLIGHT*dts[0];
+    }
+    stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,NAV_LNAV,
+                                 &nav,rs,dts,&var,&svh,&info);
+    if (stat!=0) {
+        fprintf(stderr,"forced LNAV incorrectly accepted L1C observation code\n");
+        return 1;
+    }
+    stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
+                                 &nav,rs,dts,&var,&svh,&info);
+    if (stat!=1) return 1;
+    range=geodist(rs,rr,e);
+    if (!(range>0.0)) return 1;
+    for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
+    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
+         rs[4]*rr[0]-rs[3]*rr[1]);
+    obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
+    stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
+                                  0,wavelength,&residual,azel);
+    if (stat!=1||info.message_type!=NAV_LNAV||
+        !expect_close("generic-state L1C Doppler residual",residual,0.0,5E-4)) return 1;
+
     puts("residual_ext: PASS");
     return 0;
 }
