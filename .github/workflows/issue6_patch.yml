@@ -1,0 +1,51 @@
+name: issue6-patch
+on:
+  push:
+    branches: [issue-6-all-signal-residuals-bds-tgd]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-all-signal-residuals-bds-tgd
+      - name: Apply source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          ext = Path('src/rtklib_residual_ext.c')
+          s = ext.read_text()
+          s = s.replace('#define RESIDUAL_EXT_REL_HUMI 0.7\n', '#define SQR(x) ((x)*(x))\n')
+          ext.write_text(s)
+
+          p = Path('src/pntpos.c')
+          s = p.read_text()
+          old = '''static double gettgd(int sat, const nav_t *nav)\n{\n    int i;\n    for (i=0;i<nav->n;i++) {\n        if (nav->eph[i].sat!=sat) continue;\n        return CLIGHT*nav->eph[i].tgd[0];\n    }\n    return 0.0;\n}\n'''
+          new = '''static double gettgd(gtime_t time, int sat, int index, const nav_t *nav)\n{\n    const eph_t *best=NULL;\n    double age,best_age=0.0,max_age=MAXDTOE;\n    int i,sys=satsys(sat,NULL);\n\n    if (index<0||index>=4) return 0.0;\n    if (sys==SYS_QZS) max_age=MAXDTOE_QZS;\n    else if (sys==SYS_GAL) max_age=MAXDTOE_GAL;\n    else if (sys==SYS_CMP) max_age=MAXDTOE_CMP;\n\n    for (i=0;i<nav->n;i++) {\n        if (nav->eph[i].sat!=sat) continue;\n        age=fabs(timediff(nav->eph[i].toe,time));\n        if (age>max_age) continue;\n        if (!best||age<best_age||(fabs(age-best_age)<1E-9&&\n            timediff(nav->eph[i].toc,best->toc)>0.0)) {\n            best=nav->eph+i;\n            best_age=age;\n        }\n    }\n    return best?CLIGHT*best->tgd[index]:0.0;\n}\n'''
+          if old not in s:
+              raise SystemExit('gettgd anchor not found')
+          s = s.replace(old, new, 1)
+          old_call = 'P1_P2=(1.0-gamma)*gettgd(obs->sat,nav);'
+          new_call = 'P1_P2=(1.0-gamma)*gettgd(obs->time,obs->sat,0,nav);'
+          if old_call not in s:
+              raise SystemExit('gettgd call anchor not found')
+          s = s.replace(old_call, new_call, 1)
+          old_single = '''        if (P1==0.0) return 0.0;\n        if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */\n        PC=P1-P1_P2/(1.0-gamma);\n'''
+          new_single = '''        if (P1==0.0) return 0.0;\n        if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */\n        if (P1_P2==0.0&&sys==SYS_CMP) {\n            /* BDS-SIS-ICD: B1I/B2I clocks require TGD1/TGD2; B3I is\n             * the broadcast-clock reference and needs no extra correction. */\n            if      (obs->code[i]==CODE_L2I) PC=P1-gettgd(obs->time,obs->sat,0,nav);\n            else if (obs->code[i]==CODE_L7I) PC=P1-gettgd(obs->time,obs->sat,1,nav);\n            else                             PC=P1;\n        }\n        else PC=P1-P1_P2/(1.0-gamma);\n'''
+          if old_single not in s:
+              raise SystemExit('single-frequency anchor not found')
+          s = s.replace(old_single, new_single, 1)
+          p.write_text(s)
+          PY
+          git diff --check
+          git rm .github/workflows/issue6_patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/pntpos.c src/rtklib_residual_ext.c
+          git commit -m 'fix: apply BDS ICD TGD in RTKLIB residual model'
+          git push origin HEAD:issue-6-all-signal-residuals-bds-tgd
