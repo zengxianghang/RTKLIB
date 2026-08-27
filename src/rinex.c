@@ -1385,9 +1385,9 @@ static int decode_rnx4_geph(int sat, gtime_t toc, const double *data,
     geph->tof=utc2gpst(tof);
     geph->ttm=data[34];
 
-    /* There is no legacy 7-bit tb/IODE field in the CDMA RINEX record. Keep a
-       deterministic epoch tag for diagnostics/selector provenance. */
-    geph->iode=(int)(fmod(tow+10800.0,86400.0)/90.0+0.5);
+    /* RINEX4 GLONASS CDMA has no legacy FDMA IODE/tb field. Mark it
+       unavailable instead of manufacturing an FDMA-looking issue number. */
+    geph->iode=-1;
 
     geph->taun=-data[0];
     geph->gamn= data[1];
@@ -1400,8 +1400,8 @@ static int decode_rnx4_geph(int sat, gtime_t toc, const double *data,
     geph->svh=(int)data[6];
     geph->data_validity=(int)data[10];
     geph->frq=0; /* CDMA: common carrier, no FDMA channel number */
-    geph->flag=(int)data[16]; /* RINEX4 RT/RE source flags */
-    geph->age=(int)data[17];  /* AODE, retained for diagnostics */
+    /* data[15..18] are CDMA satellite type/source/AODE/AODC fields and
+       must not be overloaded into legacy FDMA flag/age semantics. */
     geph->sva=(int)data[31];  /* orbit accuracy index */
     geph->pc[0]=data[28];
     geph->pc[1]=data[29];

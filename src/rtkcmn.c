@@ -2551,9 +2551,10 @@ static void uniqeph(nav_t *nav)
 static int cmpgeph(const void *p1, const void *p2)
 {
     geph_t *q1=(geph_t *)p1,*q2=(geph_t *)p2;
-    return q1->tof.time!=q2->tof.time?(int)(q1->tof.time-q2->tof.time):
-           (q1->toe.time!=q2->toe.time?(int)(q1->toe.time-q2->toe.time):
-            q1->sat-q2->sat);
+    if (q1->tof.time!=q2->tof.time) return (int)(q1->tof.time-q2->tof.time);
+    if (q1->toe.time!=q2->toe.time) return (int)(q1->toe.time-q2->toe.time);
+    if (q1->sat!=q2->sat) return q1->sat-q2->sat;
+    return q1->hdr.msg_type-q2->hdr.msg_type;
 }
 /* sort and unique glonass ephemeris -----------------------------------------*/
 static void uniqgeph(nav_t *nav)
@@ -2570,7 +2571,8 @@ static void uniqgeph(nav_t *nav)
     for (i=j=0;i<nav->ng;i++) {
         if (nav->geph[i].sat!=nav->geph[j].sat||
             nav->geph[i].toe.time!=nav->geph[j].toe.time||
-            nav->geph[i].svh!=nav->geph[j].svh) {
+            nav->geph[i].svh!=nav->geph[j].svh||
+            nav->geph[i].hdr.msg_type!=nav->geph[j].hdr.msg_type) {
             nav->geph[++j]=nav->geph[i];
         }
     }
