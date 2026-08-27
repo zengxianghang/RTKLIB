@@ -30,6 +30,22 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
                                 double *raw_code_bias_m,
                                 rtklib_signal_bias_info_ext_t *info);
 
+/*
+ * Compute the broadcast satellite state for one signal/message family with
+ * the same transmit-time convention used by satposs(): receive time minus
+ * raw pseudorange/c, one broadcast-clock iteration, then broadcast position
+ * and clock plus a 1 ms finite difference for velocity and clock drift.
+ *
+ * The ephemeris selector is the same signal/message-family selector used by
+ * rtklib_signal_code_bias_ext(), preventing mixed-family residuals such as a
+ * CNAV code bias evaluated with an LNAV satellite state.
+ */
+int rtklib_signal_state_ext(gtime_t receive_time, double pseudorange_m,
+                            int sat, unsigned char code,
+                            int required_message_mask, const nav_t *nav,
+                            double rs[6], double dts[2], double *var,
+                            int *svh, rtklib_signal_bias_info_ext_t *info);
+
 #ifdef __cplusplus
 }
 #endif
