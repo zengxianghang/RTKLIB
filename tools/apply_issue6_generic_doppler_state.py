@@ -94,7 +94,7 @@ replace_once(
         stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
                                      &nav,rs,dts,&var,&svh,&info);
         if (stat!=1||info.message_type!=NAV_LNAV) {
-            fprintf(stderr,"generic state did not select nearest LNAV ephemeris\n");
+            fprintf(stderr,"generic state did not select nearest LNAV ephemeris\\n");
             return 1;
         }
         range=geodist(rs,rr,e);
@@ -104,7 +104,7 @@ replace_once(
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,NAV_LNAV,
                                  &nav,rs,dts,&var,&svh,&info);
     if (stat!=0) {
-        fprintf(stderr,"forced LNAV incorrectly accepted L1C observation code\n");
+        fprintf(stderr,"forced LNAV incorrectly accepted L1C observation code\\n");
         return 1;
     }
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
