@@ -18,6 +18,11 @@ cd rnx2rtkp/gcc
 make $1
 cd ../..
 
+echo; echo % rnx2range/gcc
+cd rnx2range/gcc
+make $1
+cd ../..
+
 echo; echo % convbin/gcc
 cd convbin/gcc
 make $1
@@ -27,4 +32,3 @@ echo; echo % rtkrcv/gcc
 cd rtkrcv/gcc
 make $1
 cd ../..
-
