@@ -18,6 +18,7 @@
 *           2015/03/19 1.5  fix bug on ionosphere correction for GLO and BDS
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
+#include "rtklib_signal_bias_ext.h"
 
 static const char rcsid[]="$Id:$";
 
@@ -45,14 +46,30 @@ static double varerr(const prcopt_t *opt, double el, int sys)
     return SQR(fact)*varr;
 }
 /* get tgd parameter (m) -----------------------------------------------------*/
-static double gettgd(int sat, const nav_t *nav)
+static double gettgd(gtime_t time, int sat, int index, const nav_t *nav)
 {
-    int i;
+    const eph_t *best=NULL;
+    double age,best_age=0.0,max_age=MAXDTOE;
+    int i,sys=satsys(sat,NULL);
+
+    if (index<0||index>=4) return 0.0;
+    if (sys==SYS_QZS) max_age=MAXDTOE_QZS;
+    else if (sys==SYS_GAL) max_age=MAXDTOE_GAL;
+    else if (sys==SYS_CMP) max_age=MAXDTOE_CMP;
+
     for (i=0;i<nav->n;i++) {
         if (nav->eph[i].sat!=sat) continue;
-        return CLIGHT*nav->eph[i].tgd[0];
+        if (sys==SYS_CMP&&nav->eph[i].hdr.msg_type&&
+            !(nav->eph[i].hdr.msg_type&(NAV_D1|NAV_D2|NAV_D1D2))) continue;
+        age=fabs(timediff(nav->eph[i].toe,time));
+        if (age>max_age) continue;
+        if (!best||age<best_age||(fabs(age-best_age)<1E-9&&
+            timediff(nav->eph[i].toc,best->toc)>0.0)) {
+            best=nav->eph+i;
+            best_age=age;
+        }
     }
-    return 0.0;
+    return best?CLIGHT*best->tgd[index]:0.0;
 }
 /* psendorange with code bias correction -------------------------------------*/
 static double prange(const obsd_t *obs, const nav_t *nav, const double *azel,
@@ -89,24 +106,29 @@ static double prange(const obsd_t *obs, const nav_t *nav, const double *azel,
     P1_C1=nav->cbias[obs->sat-1][1];
     P2_C2=nav->cbias[obs->sat-1][2];
     
-    /* if no P1-P2 DCB, use TGD instead */
-    if (P1_P2==0.0&&(sys&(SYS_GPS|SYS_GAL|SYS_QZS))) {
-        P1_P2=(1.0-gamma)*gettgd(obs->sat,nav);
-    }
     if (opt->ionoopt==IONOOPT_IFLC) { /* dual-frequency */
-        
+        /* Preserve the legacy external DCB/IFLC path. */
+        if (P1_P2==0.0&&(sys&(SYS_GPS|SYS_GAL|SYS_QZS))) {
+            P1_P2=(1.0-gamma)*gettgd(obs->time,obs->sat,0,nav);
+        }
         if (P1==0.0||P2==0.0) return 0.0;
         if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
         if (obs->code[j]==CODE_L2C) P2+=P2_C2; /* C2->P2 */
-        
-        /* iono-free combination */
         PC=(gamma*P1-P2)/(gamma-1.0);
     }
     else { /* single-frequency */
-        
+        double signal_bias=0.0;
+        int signal_bias_stat;
         if (P1==0.0) return 0.0;
-        if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
-        PC=P1-P1_P2/(1.0-gamma);
+        if (P1_P2!=0.0||(obs->code[i]==CODE_L1C&&P1_C1!=0.0)) {
+            if (obs->code[i]==CODE_L1C) P1+=P1_C1; /* C1->P1 */
+            PC=P1-P1_P2/(1.0-gamma);
+        }
+        else {
+            signal_bias_stat=rtklib_signal_code_bias_ext(
+                obs->time,obs->sat,obs->code[i],0,nav,&signal_bias,NULL);
+            PC=signal_bias_stat>0?P1-signal_bias:P1;
+        }
     }
     if (opt->sateph==EPHOPT_SBAS) PC-=P1_C1; /* sbas clock based C1 */
     

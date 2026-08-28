@@ -1266,6 +1266,12 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
     
     //decode BDS CNAV
     if(hdr->sys == SYS_CMP && (hdr->msg_type &(NAV_CNV1 | NAV_CNV2 | NAV_CNV3))) {
+        /* RINEX4 BDS CNV1/2/3 does not carry a BDT week field. Derive the
+         * continuous BDT week from Toc and combine it with the Orbit-3 Toe. */
+        eph->week = week;
+        eph->toes = data[11];
+        eph->toe = bdt2gpst(bdt2time(eph->week,eph->toes));
+        eph->toe = adjweek(eph->toe,eph->toc);
         eph->Adot = data[3];
         eph->delta_n0 = data[5];
         eph->delta_n0_dot = data[20];
@@ -1284,16 +1290,16 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
             eph->svh = data[32];
             eph->int_flag = data[33];
             eph->iodc = data[34];
-            eph->ttr=bdt2gpst(bdt2time(week,data[35])); /* bdt -> gpst */
-            eph->ttr=adjweek(eph->ttr,toc);
+            eph->ttr=bdt2gpst(bdt2time(eph->week,data[35])); /* bdt -> gpst */
+            eph->ttr=adjweek(eph->ttr,eph->toc);
             eph->iode = data[38];
         } else {
             eph->sva = data[27];
             eph->svh = data[28];
             eph->int_flag = data[29];
             eph->tgd[0] = data[30];
-            eph->ttr=bdt2gpst(bdt2time(week,data[31])); /* bdt -> gpst */
-            eph->ttr=adjweek(eph->ttr,toc);
+            eph->ttr=bdt2gpst(bdt2time(eph->week,data[31])); /* bdt -> gpst */
+            eph->ttr=adjweek(eph->ttr,eph->toc);
         }
     }
     
@@ -1357,6 +1363,58 @@ static int decode_geph(double ver, int sat, gtime_t toc, double *data,
     if (geph->frq<MINFREQ_GLO||MAXFREQ_GLO<geph->frq) {
         rtktrace(2,"rinex gnav invalid freq: sat=%2d fn=%d\n",sat,geph->frq);
     }
+    return 1;
+}
+/* decode RINEX4 GLONASS CDMA ephemeris -----------------------------------*/
+static int decode_rnx4_geph(int sat, gtime_t toc, const double *data,
+                            const nav_data_hdr_t *hdr, geph_t *geph)
+{
+    geph_t geph0={0};
+    gtime_t tof;
+    double tow;
+    int week;
+
+    if (!hdr||satsys(sat,NULL)!=SYS_GLO||
+        (hdr->msg_type!=NAV_L1OC&&hdr->msg_type!=NAV_L3OC)) {
+        rtktrace(2,"glonass cdma ephemeris error: sat=%2d msg=%d\n",
+                 sat,hdr?hdr->msg_type:0);
+        return 0;
+    }
+    *geph=geph0;
+    geph->sat=sat;
+
+    /* RINEX4 CDMA Toc is UTC and is the clock reference epoch. Do not apply
+       the legacy FDMA 15-minute rounding. t_tm is the last field (UTC week). */
+    tow=time2gpst(toc,&week);
+    geph->toe=utc2gpst(toc);
+    tof=adjweek(gpst2time(week,data[34]),toc);
+    geph->tof=utc2gpst(tof);
+    geph->ttm=data[34];
+
+    /* RINEX4 GLONASS CDMA has no legacy FDMA IODE/tb field. Mark it
+       unavailable instead of manufacturing an FDMA-looking issue number. */
+    geph->iode=-1;
+
+    geph->taun=-data[0];
+    geph->gamn= data[1];
+    geph->beta= data[2];
+
+    geph->pos[0]=data[ 3]*1E3; geph->vel[0]=data[ 4]*1E3; geph->acc[0]=data[ 5]*1E3;
+    geph->pos[1]=data[ 7]*1E3; geph->vel[1]=data[ 8]*1E3; geph->acc[1]=data[ 9]*1E3;
+    geph->pos[2]=data[11]*1E3; geph->vel[2]=data[12]*1E3; geph->acc[2]=data[13]*1E3;
+
+    geph->svh=(int)data[6];
+    geph->data_validity=(int)data[10];
+    geph->frq=0; /* CDMA: common carrier, no FDMA channel number */
+    /* data[15..18] are CDMA satellite type/source/AODE/AODC fields and
+       must not be overloaded into legacy FDMA flag/age semantics. */
+    geph->sva=(int)data[31];  /* orbit accuracy index */
+    geph->pc[0]=data[28];
+    geph->pc[1]=data[29];
+    geph->pc[2]=data[30];
+
+    if (hdr->msg_type==NAV_L1OC) geph->tgd_l2ocp=data[14];
+    else                         geph->isc_l3ocp=data[14];
     return 1;
 }
 /* decode geo ephemeris ------------------------------------------------------*/
@@ -1794,7 +1852,10 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
     char buff[MAXRNXLEN],id[8]="",*p;
    
     int max_data_cnt = 31;
-    if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNAV) max_data_cnt = 35;
+    if(hdr->sys == SYS_GLO &&
+       (hdr->msg_type == NAV_L1OC || hdr->msg_type == NAV_L3OC)) max_data_cnt = 35;
+    else if(hdr->sys == SYS_GLO) max_data_cnt = 19;
+    else if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNAV) max_data_cnt = 35;
     else if((hdr->sys & (SYS_GPS | SYS_QZS)) && hdr->msg_type == NAV_CNV2) max_data_cnt = 39;
     else if(hdr->sys == SYS_CMP && (hdr->msg_type & ( NAV_CNV1 | NAV_CNV2))) max_data_cnt = 39;
     else if(hdr->sys == SYS_CMP && hdr->msg_type == NAV_CNV3) max_data_cnt = 35;
@@ -1830,9 +1891,12 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
                 data[i++]=str2num(p,0,19);
             }
             /* decode ephemeris */
-            if (sys==SYS_GLO&&i>=19) {
+            if (sys==SYS_GLO&&i>=max_data_cnt) {
                 if (!(mask&sys)) return 0;
                 *type=1;
+                if (hdr->msg_type==NAV_L1OC||hdr->msg_type==NAV_L3OC) {
+                    return decode_rnx4_geph(sat,toc,data,hdr,geph);
+                }
                 return decode_geph(ver,sat,toc,data,geph);
             }
             else if (sys==SYS_SBS&&i>=15) {
