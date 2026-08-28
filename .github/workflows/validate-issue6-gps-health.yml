@@ -1,0 +1,32 @@
+name: Validate GPS modern signal health
+
+on:
+  push:
+    branches:
+      - issue-6-all-signal-residuals-bds-tgd
+    paths:
+      - src/rtklib_signal_state_ext.c
+      - tests/residual_ext/test_residual_ext.c
+      - .github/workflows/validate-issue6-gps-health.yml
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-all-signal-residuals-bds-tgd
+      - name: GPS modern and residual regressions
+        run: |
+          set -euo pipefail
+          make -C tests/signal_bias_ext clean test
+          make -C tests/residual_ext clean test
+          make -C tests/rinex4_glo_l3oc clean test
+      - name: Standalone pntpos compile
+        run: |
+          cc -O2 -std=c99 -Wall -Wextra -pedantic \
+            -Isrc -DENAGLO -DENAQZS -DENAGAL -DENACMP -DNFREQ=3 \
+            -c src/pntpos.c -o /tmp/pntpos.o
