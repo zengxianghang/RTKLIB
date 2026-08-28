@@ -13,6 +13,12 @@ static int expect_close(const char *name, double actual, double expected, double
     return 0;
 }
 
+static int fail_stage(const char *stage)
+{
+    fprintf(stderr,"residual_ext failure at stage: %s\n",stage);
+    return 1;
+}
+
 static void init_eph(eph_t *eph, int sat, gtime_t toe, int msg_type,
                      int iode, double m0, double tgd0)
 {
@@ -44,7 +50,7 @@ int main(void)
     double zero_velocity[3]={0};
     int sat=satno(SYS_GPS,3),svh=0,stat,i;
 
-    if (!sat) return 1;
+    if (!sat) return fail_stage("satno");
     init_eph(eph+0,sat,t,NAV_LNAV,10,0.1,1E-8);
     init_eph(eph+1,sat,t,NAV_CNAV,11,1.1,3E-8);
     eph[1].isc[1]=1E-8;
@@ -96,7 +102,7 @@ int main(void)
 
     stat=rtklib_signal_code_bias_ext(t,sat,CODE_L2S,NAV_CNAV,&nav,&bias,&info);
     if (stat!=1||info.iode!=11||
-        !expect_close("L2C CNAV bias",bias,CLIGHT*2E-8,1E-9)) return 1;
+        !expect_close("L2C CNAV bias",bias,CLIGHT*2E-8,1E-9)) return fail_stage("L2C bias");
 
     opt.ionoopt=IONOOPT_OFF;
     opt.tropopt=TROPOPT_OFF;
@@ -106,22 +112,22 @@ int main(void)
     for (i=0;i<5;i++) {
         stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L2S,NAV_CNAV,
                                      &nav,rs,dts,&var,&svh,&info);
-        if (stat!=1||svh!=0) return 1;
+        if (stat!=1||svh!=0) return fail_stage("L2C state iteration");
         range=geodist(rs,rr,e);
-        if (!(range>0.0)) return 1;
+        if (!(range>0.0)) return fail_stage("L2C range iteration");
         obs.P[0]=range-CLIGHT*dts[0]+bias;
     }
 
     stat=rtklib_rescode_signal_ext(&obs,&nav,&opt,rr,0.0,0.0,
                                    NAV_CNAV,wavelength,&residual,azel,&info);
     if (stat!=1||info.message_type!=NAV_CNAV||
-        !expect_close("truth-state code residual",residual,0.0,1E-4)) return 1;
+        !expect_close("truth-state code residual",residual,0.0,1E-4)) return fail_stage("L2C code residual");
 
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L2S,NAV_CNAV,
                                  &nav,rs,dts,&var,&svh,&info);
-    if (stat!=1||svh!=0) return 1;
+    if (stat!=1||svh!=0) return fail_stage("L2C Doppler state");
     range=geodist(rs,rr,e);
-    if (!(range>0.0)) return 1;
+    if (!(range>0.0)) return fail_stage("L2C Doppler range");
     for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
     rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
          rs[4]*rr[0]-rs[3]*rr[1]);
@@ -129,7 +135,7 @@ int main(void)
 
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
                                   NAV_CNAV,wavelength,&residual,azel);
-    if (stat!=1||!expect_close("truth-state Doppler residual",residual,0.0,5E-4)) return 1;
+    if (stat!=1||!expect_close("truth-state Doppler residual",residual,0.0,5E-4)) return fail_stage("L2C Doppler residual");
 
     /*
      * L5 CNAV is intentionally broadcast unhealthy while pre-operational.
@@ -140,13 +146,13 @@ int main(void)
     obs.P[0]=2.4E7;
     wavelength=CLIGHT/FREQ5;
     stat=rtklib_signal_code_bias_ext(t,sat,CODE_L5Q,NAV_CNAV,&nav,&bias,&info);
-    if (stat!=1||!expect_close("L5Q CNAV bias",bias,CLIGHT*1E-8,1E-9)) return 1;
+    if (stat!=1||!expect_close("L5Q CNAV bias",bias,CLIGHT*1E-8,1E-9)) return fail_stage("L5Q bias");
     for (i=0;i<5;i++) {
         stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L5Q,NAV_CNAV,
                                      &nav,rs,dts,&var,&svh,&info);
-        if (stat!=1||svh!=1) return 1;
+        if (stat!=1||svh!=1) return fail_stage("L5Q state iteration");
         range=geodist(rs,rr,e);
-        if (!(range>0.0)) return 1;
+        if (!(range>0.0)) return fail_stage("L5Q range iteration");
         obs.P[0]=range-CLIGHT*dts[0]+bias;
     }
     stat=rtklib_rescode_signal_ext(&obs,&nav,&opt,rr,0.0,0.0,
@@ -157,13 +163,13 @@ int main(void)
     }
     stat=rtklib_rescode_signal_diagnostic_ext(
         &obs,&nav,&opt,rr,0.0,0.0,NAV_CNAV,wavelength,&residual,azel,&info);
-    if (stat!=1||!expect_close("diagnostic L5Q code residual",residual,0.0,1E-4)) return 1;
+    if (stat!=1||!expect_close("diagnostic L5Q code residual",residual,0.0,1E-4)) return fail_stage("L5Q diagnostic code residual");
 
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L5Q,NAV_CNAV,
                                  &nav,rs,dts,&var,&svh,&info);
-    if (stat!=1||svh!=1) return 1;
+    if (stat!=1||svh!=1) return fail_stage("L5Q Doppler state");
     range=geodist(rs,rr,e);
-    if (!(range>0.0)) return 1;
+    if (!(range>0.0)) return fail_stage("L5Q Doppler range");
     for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
     rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
          rs[4]*rr[0]-rs[3]*rr[1]);
@@ -176,7 +182,7 @@ int main(void)
     }
     stat=rtklib_resdop_signal_diagnostic_ext(
         &obs,&nav,&opt,rr,zero_velocity,0.0,NAV_CNAV,wavelength,&residual,azel);
-    if (stat!=1||!expect_close("diagnostic L5Q Doppler residual",residual,0.0,5E-4)) return 1;
+    if (stat!=1||!expect_close("diagnostic L5Q Doppler residual",residual,0.0,5E-4)) return fail_stage("L5Q diagnostic Doppler residual");
 
     opt.exsats[sat-1]=1;
     stat=rtklib_rescode_signal_diagnostic_ext(
@@ -199,7 +205,7 @@ int main(void)
             return 1;
         }
         range=geodist(rs,rr,e);
-        if (!(range>0.0)) return 1;
+        if (!(range>0.0)) return fail_stage("generic L1C range iteration");
         obs.P[0]=range-CLIGHT*dts[0];
     }
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,NAV_LNAV,
@@ -210,16 +216,16 @@ int main(void)
     }
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
                                  &nav,rs,dts,&var,&svh,&info);
-    if (stat!=1||svh!=0) return 1;
+    if (stat!=1||svh!=0) return fail_stage("generic L1C Doppler state");
     range=geodist(rs,rr,e);
-    if (!(range>0.0)) return 1;
+    if (!(range>0.0)) return fail_stage("generic L1C Doppler range");
     for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
     rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
          rs[4]*rr[0]-rs[3]*rr[1]);
     obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
                                   0,wavelength,&residual,azel);
-    if (stat!=1||!expect_close("generic-state L1C Doppler residual",residual,0.0,5E-4)) return 1;
+    if (stat!=1||!expect_close("generic-state L1C Doppler residual",residual,0.0,5E-4)) return fail_stage("generic L1C Doppler residual");
 
     puts("residual_ext: PASS");
     return 0;
