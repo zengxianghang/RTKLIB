@@ -133,9 +133,19 @@ static int resdop_signal_ext_impl(
         !residual_mps||!isfinite(wavelength_m)||wavelength_m<=0.0||
         !isfinite(obs->D[0])||obs->P[0]<=0.0) return -1;
 
-    stat=rtklib_signal_state_ext(obs->time,obs->P[0],obs->sat,obs->code[0],
-                                 required_message_mask,nav,rs,dts,&vare,&svh,
-                                 NULL);
+    if (required_message_mask==0) {
+        /* Doppler does not consume an observable-specific code bias. A zero
+         * message mask therefore follows the normal RTKLIB satposs() generic
+         * broadcast-state path even when the observation code has no matching
+         * navigation family (for example GLONASS L3OC/G3 with FDMA state only). */
+        satposs(obs->time,obs,1,nav,opt->sateph,rs,dts,&vare,&svh);
+        stat=norm(rs,3)>0.0?1:0;
+    }
+    else {
+        stat=rtklib_signal_state_ext(obs->time,obs->P[0],obs->sat,
+                                     obs->code[0],required_message_mask,nav,
+                                     rs,dts,&vare,&svh,NULL);
+    }
     if (stat<=0) return stat;
     if ((r=geodist(rs,receiver_ecef_m,e))<=0.0) return 0;
     (void)r;
