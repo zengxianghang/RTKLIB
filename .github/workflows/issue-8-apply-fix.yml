@@ -1,0 +1,62 @@
+name: Apply issue 8 SVA serialization fix
+
+on:
+  push:
+    branches:
+      - issue-8-sva-nav-serialization
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-8-sva-nav-serialization
+          fetch-depth: 0
+
+      - name: Apply minimal SVA serialization patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/rtkcmn.c')
+          text = path.read_text()
+
+          marker = 'extern int readnav(const char *file, nav_t *nav)\n'
+          macros = '''#if URA2URAI\n#define SVA_SCAN_FMT "%d"\n#define SVA_SAVE_FMT "%d"\n#else\n#define SVA_SCAN_FMT "%lf"\n#define SVA_SAVE_FMT "%.14E"\n#endif\n'''
+          if macros not in text:
+              assert marker in text
+              text = text.replace(marker, macros + marker, 1)
+
+          old_scan = 'sscanf(p+1,"%d,%d,%d,%d,%ld,%ld,%ld,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,"'
+          new_scan = 'sscanf(p+1,"%d,%d," SVA_SCAN_FMT ",%d,%ld,%ld,%ld,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,"'
+          assert old_scan in text
+          text = text.replace(old_scan, new_scan, 1)
+
+          old_save = 'fprintf(fp,"%s,%d,%d,%d,%d,%d,%d,%d,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,"'
+          new_save = 'fprintf(fp,"%s,%d,%d," SVA_SAVE_FMT ",%d,%d,%d,%d,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,"'
+          assert old_save in text
+          text = text.replace(old_save, new_save, 1)
+
+          tail_marker = '    fclose(fp);\n    return 1;\n}\n/* free observation data'
+          replacement = '    fclose(fp);\n    return 1;\n}\n#undef SVA_SCAN_FMT\n#undef SVA_SAVE_FMT\n/* free observation data'
+          assert tail_marker in text
+          text = text.replace(tail_marker, replacement, 1)
+
+          path.write_text(text)
+
+      - name: Build and run SVA serialization regression
+        run: make -C tests/nav_sva_serialization clean test
+
+      - name: Remove one-shot workflow and commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/issue-8-apply-fix.yml
+          git add src/rtkcmn.c
+          git commit -m "fix(rtkcmn): serialize eph sva with matching type"
+          git push origin HEAD:issue-8-sva-nav-serialization
