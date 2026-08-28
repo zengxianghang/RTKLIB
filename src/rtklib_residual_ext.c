@@ -9,8 +9,10 @@ static int rescode_signal_ext_impl(
     double wavelength_m, int ignore_broadcast_health, double *residual_m,
     double azel_rad[2], rtklib_signal_bias_info_ext_t *bias_info)
 {
+    rtklib_signal_bias_info_ext_t state_info,bias_selected_info;
     double rs[6]={0},dts[2]={0},vare=0.0,e[3],pos[3],azel[2];
     double r,code_bias,dion=0.0,vion=0.0,dtrp=0.0,vtrp=0.0,p;
+    gtime_t signal_time;
     int svh=0,stat;
 
     if (!obs||!nav||!opt||!receiver_ecef_m||!residual_m||
@@ -18,17 +20,26 @@ static int rescode_signal_ext_impl(
 
     stat=rtklib_signal_state_ext(obs->time,obs->P[0],obs->sat,obs->code[0],
                                  required_message_mask,nav,rs,dts,&vare,&svh,
-                                 NULL);
+                                 &state_info);
     if (stat<=0) return stat;
     if ((r=geodist(rs,receiver_ecef_m,e))<=0.0) return 0;
     ecef2pos(receiver_ecef_m,pos);
     if (satazel(pos,e,azel)<opt->elmin||
         satexclude(obs->sat,ignore_broadcast_health?0:svh,opt)) return 0;
 
-    stat=rtklib_signal_code_bias_ext(obs->time,obs->sat,obs->code[0],
+    /* Use the same raw signal-time estimate as rtklib_signal_state_ext() for
+     * bias-record selection. Selecting a TGD/BGD/ISC record at receive time
+     * can cross a NAV handover during the ~70 ms signal flight and combine a
+     * new bias record with a state propagated from the preceding record. */
+    signal_time=timeadd(obs->time,-obs->P[0]/CLIGHT);
+    stat=rtklib_signal_code_bias_ext(signal_time,obs->sat,obs->code[0],
                                      required_message_mask,nav,&code_bias,
-                                     bias_info);
+                                     &bias_selected_info);
     if (stat<=0) return stat;
+    if (required_message_mask&&
+        (bias_selected_info.message_type!=state_info.message_type||
+         bias_selected_info.iode!=state_info.iode)) return 0;
+    if (bias_info) *bias_info=bias_selected_info;
 
     if (!ionocorr(obs->time,nav,obs->sat,pos,azel,opt->ionoopt,
                   &dion,&vion)) return 0;
