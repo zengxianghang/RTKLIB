@@ -2708,6 +2708,13 @@ extern int screent(gtime_t time, gtime_t ts, gtime_t te, double tint)
 *          nav_t   nav   O/I    navigation data
 * return : status (1:ok,0:no file)
 *-----------------------------------------------------------------------------*/
+#if URA2URAI
+#define SVA_SCAN_FMT "%d"
+#define SVA_SAVE_FMT "%d"
+#else
+#define SVA_SCAN_FMT "%lf"
+#define SVA_SAVE_FMT "%.14E"
+#endif
 extern int readnav(const char *file, nav_t *nav)
 {
     FILE *fp;
@@ -2735,7 +2742,7 @@ extern int readnav(const char *file, nav_t *nav)
         if (!(sat=satid2no(buff))) continue;
         nav->eph[sat-1]=eph0;
         nav->eph[sat-1].sat=sat;
-        sscanf(p+1,"%d,%d,%d,%d,%ld,%ld,%ld,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,"
+        sscanf(p+1,"%d,%d," SVA_SCAN_FMT ",%d,%ld,%ld,%ld,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,"
                     "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d,%d",
                &nav->eph[sat-1].iode,&nav->eph[sat-1].iodc,&nav->eph[sat-1].sva ,
                &nav->eph[sat-1].svh ,&nav->eph[sat-1].toe.time,
@@ -2765,7 +2772,7 @@ extern int savenav(const char *file, const nav_t *nav)
     for (i=0;i<MAXSAT;i++) {
         if (nav->eph[i].ttr.time==0) continue;
         satno2id(nav->eph[i].sat,id);
-        fprintf(fp,"%s,%d,%d,%d,%d,%d,%d,%d,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,"
+        fprintf(fp,"%s,%d,%d," SVA_SAVE_FMT ",%d,%d,%d,%d,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,"
                    "%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,%.14E,"
                    "%.14E,%.14E,%.14E,%.14E,%.14E,%d,%d\n",
                 id,nav->eph[i].iode,nav->eph[i].iodc,nav->eph[i].sva ,
@@ -2788,6 +2795,8 @@ extern int savenav(const char *file, const nav_t *nav)
     fclose(fp);
     return 1;
 }
+#undef SVA_SCAN_FMT
+#undef SVA_SAVE_FMT
 /* free observation data -------------------------------------------------------
 * free memory for observation data
 * args   : obs_t *obs    IO     observation data
