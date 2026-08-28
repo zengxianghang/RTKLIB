@@ -48,6 +48,7 @@ int main(void)
     init_eph(eph+0,sat,t,NAV_LNAV,10,0.1,1E-8);
     init_eph(eph+1,sat,t,NAV_CNAV,11,1.1,3E-8);
     eph[1].isc[1]=1E-8;
+    eph[1].isc[3]=2E-8;
     /* RINEX GPS CNAV SV health 001b: L1/L2 healthy, L5 unhealthy. */
     eph[1].svh=1;
     nav.eph=eph; nav.n=nav.nmax=2;
@@ -129,6 +130,62 @@ int main(void)
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
                                   NAV_CNAV,wavelength,&residual,azel);
     if (stat!=1||!expect_close("truth-state Doppler residual",residual,0.0,5E-4)) return 1;
+
+    /*
+     * L5 CNAV is intentionally broadcast unhealthy while pre-operational.
+     * Strict residual APIs must preserve that exclusion, while diagnostic APIs
+     * may validate model closure without turning the signal healthy for PVT.
+     */
+    obs.code[0]=CODE_L5Q;
+    obs.P[0]=2.4E7;
+    wavelength=CLIGHT/FREQ5;
+    stat=rtklib_signal_code_bias_ext(t,sat,CODE_L5Q,NAV_CNAV,&nav,&bias,&info);
+    if (stat!=1||!expect_close("L5Q CNAV bias",bias,CLIGHT*1E-8,1E-9)) return 1;
+    for (i=0;i<5;i++) {
+        stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L5Q,NAV_CNAV,
+                                     &nav,rs,dts,&var,&svh,&info);
+        if (stat!=1||svh!=1) return 1;
+        range=geodist(rs,rr,e);
+        if (!(range>0.0)) return 1;
+        obs.P[0]=range-CLIGHT*dts[0]+bias;
+    }
+    stat=rtklib_rescode_signal_ext(&obs,&nav,&opt,rr,0.0,0.0,
+                                   NAV_CNAV,wavelength,&residual,azel,&info);
+    if (stat!=0) {
+        fprintf(stderr,"strict L5Q code residual accepted unhealthy broadcast health\n");
+        return 1;
+    }
+    stat=rtklib_rescode_signal_diagnostic_ext(
+        &obs,&nav,&opt,rr,0.0,0.0,NAV_CNAV,wavelength,&residual,azel,&info);
+    if (stat!=1||!expect_close("diagnostic L5Q code residual",residual,0.0,1E-4)) return 1;
+
+    stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L5Q,NAV_CNAV,
+                                 &nav,rs,dts,&var,&svh,&info);
+    if (stat!=1||svh!=1) return 1;
+    range=geodist(rs,rr,e);
+    if (!(range>0.0)) return 1;
+    for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
+    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
+         rs[4]*rr[0]-rs[3]*rr[1]);
+    obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
+    stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
+                                  NAV_CNAV,wavelength,&residual,azel);
+    if (stat!=0) {
+        fprintf(stderr,"strict L5Q Doppler residual accepted unhealthy broadcast health\n");
+        return 1;
+    }
+    stat=rtklib_resdop_signal_diagnostic_ext(
+        &obs,&nav,&opt,rr,zero_velocity,0.0,NAV_CNAV,wavelength,&residual,azel);
+    if (stat!=1||!expect_close("diagnostic L5Q Doppler residual",residual,0.0,5E-4)) return 1;
+
+    opt.exsats[sat-1]=1;
+    stat=rtklib_rescode_signal_diagnostic_ext(
+        &obs,&nav,&opt,rr,0.0,0.0,NAV_CNAV,wavelength,&residual,azel,&info);
+    if (stat!=0) {
+        fprintf(stderr,"diagnostic residual ignored explicit opt.exsats exclusion\n");
+        return 1;
+    }
+    opt.exsats[sat-1]=0;
 
     /* Doppler does not require the signal-specific code-bias NAV family. */
     obs.code[0]=CODE_L1L;
