@@ -3,6 +3,26 @@
 #include <math.h>
 #include <string.h>
 
+/* GPS CNAV stores L1/L2/L5 health in bits 2/1/0 of the RINEX SV-health
+ * field. GPS CNV2 carries the L1C health bit. Keep the raw eph->svh value
+ * untouched in nav_t and normalize only the health returned for the selected
+ * observation signal. Other message families retain the legacy semantics. */
+static int signal_health(int sys, int message_type, unsigned char code,
+                         int raw_svh)
+{
+    if (sys!=SYS_GPS) return raw_svh;
+
+    if (message_type==NAV_CNAV) {
+        if (code==CODE_L1C||code==CODE_L1L) return raw_svh&4?1:0;
+        if (code==CODE_L2S)                 return raw_svh&2?1:0;
+        if (code==CODE_L5Q)                 return raw_svh&1?1:0;
+    }
+    else if (message_type==NAV_CNV2) {
+        if (code==CODE_L1C||code==CODE_L1L) return raw_svh&1?1:0;
+    }
+    return raw_svh;
+}
+
 int rtklib_signal_state_ext(gtime_t receive_time, double pseudorange_m,
                             int sat, unsigned char code,
                             int required_message_mask, const nav_t *nav,
@@ -40,7 +60,8 @@ int rtklib_signal_state_ext(gtime_t receive_time, double pseudorange_m,
     else {
         eph2pos(transmit_time,&eph,rs,dts,var);
         eph2pos(timeadd(transmit_time,1E-3),&eph,rst,&dtst,&vart);
-        *svh=eph.svh;
+        *svh=signal_health(selected_info.system,selected_info.message_type,
+                           code,eph.svh);
     }
     for (i=0;i<3;i++) rs[i+3]=(rst[i]-rs[i])/1E-3;
     dts[1]=(dtst-dts[0])/1E-3;
