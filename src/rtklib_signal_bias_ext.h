@@ -15,6 +15,17 @@ typedef struct {
 } rtklib_signal_bias_info_ext_t;
 
 /*
+ * Interpret the raw RINEX/broadcast SV-health field for one observation
+ * signal and message family without modifying the stored ephemeris value.
+ * GPS CNAV uses the combined L1/L2/L5 health bits; GPS CNV2 carries L1C
+ * health. Other systems/families preserve their raw health semantics.
+ *
+ * return: 0=healthy, nonzero=unhealthy/raw health value.
+ */
+int rtklib_signal_health_ext(int system, int message_type,
+                             unsigned char code, int raw_svh);
+
+/*
  * Return the broadcast signal-specific code bias contained in a raw
  * pseudorange. The value follows the broadcast satellite-clock reference:
  * raw_P = common_range_terms + raw_code_bias_m.
