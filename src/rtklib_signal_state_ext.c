@@ -7,10 +7,10 @@
  * field. GPS CNV2 carries the L1C health bit. Keep the raw eph->svh value
  * untouched in nav_t and normalize only the health returned for the selected
  * observation signal. Other message families retain the legacy semantics. */
-static int signal_health(int sys, int message_type, unsigned char code,
-                         int raw_svh)
+int rtklib_signal_health_ext(int system, int message_type,
+                             unsigned char code, int raw_svh)
 {
-    if (sys!=SYS_GPS) return raw_svh;
+    if (system!=SYS_GPS) return raw_svh;
 
     if (message_type==NAV_CNAV) {
         if (code==CODE_L1C||code==CODE_L1L) return raw_svh&4?1:0;
@@ -60,8 +60,9 @@ int rtklib_signal_state_ext(gtime_t receive_time, double pseudorange_m,
     else {
         eph2pos(transmit_time,&eph,rs,dts,var);
         eph2pos(timeadd(transmit_time,1E-3),&eph,rst,&dtst,&vart);
-        *svh=signal_health(selected_info.system,selected_info.message_type,
-                           code,eph.svh);
+        *svh=rtklib_signal_health_ext(selected_info.system,
+                                      selected_info.message_type,
+                                      code,eph.svh);
     }
     for (i=0;i<3;i++) rs[i+3]=(rst[i]-rs[i])/1E-3;
     dts[1]=(dtst-dts[0])/1E-3;
