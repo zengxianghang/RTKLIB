@@ -48,6 +48,8 @@ int main(void)
     init_eph(eph+0,sat,t,NAV_LNAV,10,0.1,1E-8);
     init_eph(eph+1,sat,t,NAV_CNAV,11,1.1,3E-8);
     eph[1].isc[1]=1E-8;
+    /* RINEX GPS CNAV SV health 001b: L1/L2 healthy, L5 unhealthy. */
+    eph[1].svh=1;
     nav.eph=eph; nav.n=nav.nmax=2;
     pos2ecef(pos,rr);
 
@@ -59,10 +61,37 @@ int main(void)
 
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L2S,NAV_CNAV,
                                  &nav,rs,dts,&var,&svh,&info);
-    if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11) {
-        fprintf(stderr,"state selector did not preserve CNAV family\n");
+    if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11||svh!=0) {
+        fprintf(stderr,"CNAV L2 health/selector mismatch: stat=%d type=%d iode=%d svh=%d\n",
+                stat,info.message_type,info.iode,svh);
         return 1;
     }
+    stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L5Q,NAV_CNAV,
+                                 &nav,rs,dts,&var,&svh,&info);
+    if (stat!=1||svh!=1) {
+        fprintf(stderr,"CNAV L5 health mismatch: stat=%d svh=%d\n",stat,svh);
+        return 1;
+    }
+
+    /* Legacy health is not reinterpreted. */
+    eph[0].svh=1;
+    stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1C,NAV_LNAV,
+                                 &nav,rs,dts,&var,&svh,&info);
+    if (stat!=1||svh!=1) {
+        fprintf(stderr,"legacy health semantics changed: stat=%d svh=%d\n",stat,svh);
+        return 1;
+    }
+    eph[0].svh=0;
+
+    /* GPS CNV2 exposes the L1C health bit; nonzero remains unhealthy. */
+    eph[1].hdr.msg_type=NAV_CNV2;
+    stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,NAV_CNV2,
+                                 &nav,rs,dts,&var,&svh,&info);
+    if (stat!=1||svh!=1) {
+        fprintf(stderr,"CNV2 L1C health mismatch: stat=%d svh=%d\n",stat,svh);
+        return 1;
+    }
+    eph[1].hdr.msg_type=NAV_CNAV;
 
     stat=rtklib_signal_code_bias_ext(t,sat,CODE_L2S,NAV_CNAV,&nav,&bias,&info);
     if (stat!=1||info.iode!=11||
@@ -76,7 +105,7 @@ int main(void)
     for (i=0;i<5;i++) {
         stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L2S,NAV_CNAV,
                                      &nav,rs,dts,&var,&svh,&info);
-        if (stat!=1) return 1;
+        if (stat!=1||svh!=0) return 1;
         range=geodist(rs,rr,e);
         if (!(range>0.0)) return 1;
         obs.P[0]=range-CLIGHT*dts[0]+bias;
@@ -89,7 +118,7 @@ int main(void)
 
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L2S,NAV_CNAV,
                                  &nav,rs,dts,&var,&svh,&info);
-    if (stat!=1) return 1;
+    if (stat!=1||svh!=0) return 1;
     range=geodist(rs,rr,e);
     if (!(range>0.0)) return 1;
     for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
@@ -108,7 +137,7 @@ int main(void)
     for (i=0;i<5;i++) {
         stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
                                      &nav,rs,dts,&var,&svh,&info);
-        if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11) {
+        if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11||svh!=0) {
             fprintf(stderr,"generic state did not mirror stock equal-age tie selection\n");
             return 1;
         }
@@ -124,7 +153,7 @@ int main(void)
     }
     stat=rtklib_signal_state_ext(t,obs.P[0],sat,CODE_L1L,0,
                                  &nav,rs,dts,&var,&svh,&info);
-    if (stat!=1) return 1;
+    if (stat!=1||svh!=0) return 1;
     range=geodist(rs,rr,e);
     if (!(range>0.0)) return 1;
     for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
@@ -133,8 +162,7 @@ int main(void)
     obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
                                   0,wavelength,&residual,azel);
-    if (stat!=1||info.message_type!=NAV_CNAV||info.iode!=11||
-        !expect_close("generic-state L1C Doppler residual",residual,0.0,5E-4)) return 1;
+    if (stat!=1||!expect_close("generic-state L1C Doppler residual",residual,0.0,5E-4)) return 1;
 
     puts("residual_ext: PASS");
     return 0;
