@@ -33,24 +33,31 @@ int rtklib_signal_state_ext(gtime_t receive_time, double pseudorange_m,
     geph_t geph;
     rtklib_signal_bias_info_ext_t selected_info;
     double rst[3]={0},dtst=0.0,vart=0.0,dt;
-    gtime_t transmit_time;
+    gtime_t raw_transmit_time,transmit_time;
     int i,stat;
 
     if (!nav||!rs||!dts||!var||!svh||sat<=0||sat>MAXSAT||
         code==CODE_NONE||!isfinite(pseudorange_m)||pseudorange_m<=0.0) return -1;
 
+    /* Select the signal/message-family ephemeris at the signal epoch, not at
+     * receive time. The receive/transmit difference is normally only ~70 ms,
+     * but selecting at receive time can cross an ephemeris handover boundary
+     * and combine a new record with a signal that was transmitted under the
+     * preceding record. Start from the raw pseudorange transmit-time estimate,
+     * then apply the same one broadcast-clock correction used by satposs(). */
+    raw_transmit_time=timeadd(receive_time,-pseudorange_m/CLIGHT);
+
     memset(&eph,0,sizeof(eph));
     memset(&geph,0,sizeof(geph));
     memset(&selected_info,0,sizeof(selected_info));
-    stat=rtklib_signal_ephemeris_ext(receive_time,sat,code,
+    stat=rtklib_signal_ephemeris_ext(raw_transmit_time,sat,code,
                                      required_message_mask,nav,&eph,&geph,
                                      &selected_info);
     if (stat<=0) return stat;
 
-    transmit_time=timeadd(receive_time,-pseudorange_m/CLIGHT);
-    if (selected_info.system==SYS_GLO) dt=geph2clk(transmit_time,&geph);
-    else                              dt=eph2clk (transmit_time,&eph );
-    transmit_time=timeadd(transmit_time,-dt);
+    if (selected_info.system==SYS_GLO) dt=geph2clk(raw_transmit_time,&geph);
+    else                              dt=eph2clk (raw_transmit_time,&eph );
+    transmit_time=timeadd(raw_transmit_time,-dt);
 
     if (selected_info.system==SYS_GLO) {
         geph2pos(transmit_time,&geph,rs,dts,var);
