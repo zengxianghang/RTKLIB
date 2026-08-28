@@ -9,9 +9,9 @@ static int rescode_signal_ext_impl(
     double wavelength_m, int ignore_broadcast_health, double *residual_m,
     double azel_rad[2], rtklib_signal_bias_info_ext_t *bias_info)
 {
-    rtklib_signal_bias_info_ext_t state_info,bias_selected_info;
     double rs[6]={0},dts[2]={0},vare=0.0,e[3],pos[3],azel[2];
     double r,code_bias,dion=0.0,vion=0.0,dtrp=0.0,vtrp=0.0,p;
+    rtklib_signal_bias_info_ext_t state_info,bias_selected_info;
     gtime_t signal_time;
     int svh=0,stat;
 
@@ -27,10 +27,6 @@ static int rescode_signal_ext_impl(
     if (satazel(pos,e,azel)<opt->elmin||
         satexclude(obs->sat,ignore_broadcast_health?0:svh,opt)) return 0;
 
-    /* Use the same raw signal-time estimate as rtklib_signal_state_ext() for
-     * bias-record selection. Selecting a TGD/BGD/ISC record at receive time
-     * can cross a NAV handover during the ~70 ms signal flight and combine a
-     * new bias record with a state propagated from the preceding record. */
     signal_time=timeadd(obs->time,-obs->P[0]/CLIGHT);
     stat=rtklib_signal_code_bias_ext(signal_time,obs->sat,obs->code[0],
                                      required_message_mask,nav,&code_bias,
@@ -145,12 +141,28 @@ static int resdop_signal_ext_impl(
         !isfinite(obs->D[0])||obs->P[0]<=0.0) return -1;
 
     if (required_message_mask==0) {
+        eph_t eph={0};
+        geph_t geph={0};
+        rtklib_signal_bias_info_ext_t selected_info={0};
+
         /* Doppler does not consume an observable-specific code bias. A zero
-         * message mask therefore follows the normal RTKLIB satposs() generic
-         * broadcast-state path even when the observation code has no matching
-         * navigation family (for example GLONASS L3OC/G3 with FDMA state only). */
+         * message mask therefore keeps stock RTKLIB satposs() orbit/clock and
+         * receive-epoch ephemeris-selection semantics. However, RINEX 4 GPS
+         * CNAV/CNV2 health is signal-specific: a raw nonzero SV-health value can
+         * mark L5 unhealthy while L1/L2 remain healthy. Re-select only metadata
+         * using the same receive epoch and normalize health for the observation
+         * signal; if no compatible metadata selector exists (for example GLO G3
+         * with only FDMA state), retain stock satposs() health unchanged. */
         satposs(obs->time,obs,1,nav,opt->sateph,rs,dts,&vare,&svh);
         stat=norm(rs,3)>0.0?1:0;
+        if (stat>0&&
+            rtklib_signal_ephemeris_ext(obs->time,obs->sat,obs->code[0],0,
+                                        nav,&eph,&geph,&selected_info)==1) {
+            int raw_svh=selected_info.system==SYS_GLO?geph.svh:eph.svh;
+            svh=rtklib_signal_health_ext(selected_info.system,
+                                         selected_info.message_type,
+                                         obs->code[0],raw_svh);
+        }
     }
     else {
         stat=rtklib_signal_state_ext(obs->time,obs->P[0],obs->sat,
