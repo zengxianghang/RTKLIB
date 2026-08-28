@@ -176,13 +176,16 @@ int main(int argc, char **argv)
         usage(stderr);
         return 2;
     }
+    if (strcmp(input,"-")&&strcmp(output,"-")&&!strcmp(input,output)) {
+        fprintf(stderr,PROGRAM ": input and output paths must differ\n");
+        return 2;
+    }
 
     status=rnxrange_convert_file(input,output,&options,&report,stderr,error,
                                  sizeof(error));
     if (!status) {
         fprintf(stderr,PROGRAM ": conversion failed: %s\n",
                 error[0]?error:"unspecified error");
-        if (strcmp(output,"-")) remove(output);
         return 1;
     }
     rnxrange_print_report(stderr,&report);
