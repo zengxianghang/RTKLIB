@@ -31,8 +31,11 @@ test: test_rnxrange rnx2range_cli
 	grep -q '^source_nonempty_values=5$$' cli_test.report
 	grep -q '^converted_values=5$$' cli_test.report
 	grep -q '^conservation=5=5+0+0$$' cli_test.report
+	! ./rnx2range_cli -i data/rinex4_mixed_obs.rnx -o data/rinex4_mixed_obs.rnx 2>cli_same_path.report
+	grep -q 'input and output paths must differ' cli_same_path.report
+	grep -q 'RINEX VERSION / TYPE' data/rinex4_mixed_obs.rnx
 
 clean:
-	rm -f test_rnxrange test_rnxrange.exe rnx2range_cli rnx2range_cli.exe *.o cli_test.rangea cli_test.report
+	rm -f test_rnxrange test_rnxrange.exe rnx2range_cli rnx2range_cli.exe *.o cli_test.rangea cli_test.report cli_same_path.report
 
 .PHONY: all test clean
