@@ -33,24 +33,26 @@ int rtklib_signal_state_ext(gtime_t receive_time, double pseudorange_m,
     geph_t geph;
     rtklib_signal_bias_info_ext_t selected_info;
     double rst[3]={0},dtst=0.0,vart=0.0,dt;
-    gtime_t raw_transmit_time,transmit_time;
+    gtime_t raw_transmit_time,selection_time,transmit_time;
     int i,stat;
 
     if (!nav||!rs||!dts||!var||!svh||sat<=0||sat>MAXSAT||
         code==CODE_NONE||!isfinite(pseudorange_m)||pseudorange_m<=0.0) return -1;
 
-    /* Select the signal/message-family ephemeris at the signal epoch, not at
-     * receive time. The receive/transmit difference is normally only ~70 ms,
-     * but selecting at receive time can cross an ephemeris handover boundary
-     * and combine a new record with a signal that was transmitted under the
-     * preceding record. Start from the raw pseudorange transmit-time estimate,
-     * then apply the same one broadcast-clock correction used by satposs(). */
+    /* Derive the raw transmit epoch from the observed pseudorange first. For a
+     * forced signal/message family, select its broadcast record at that signal
+     * epoch so a receive-time NAV handover cannot mix a new record with a signal
+     * transmitted under the preceding record. A zero message mask is the generic
+     * RTKLIB path and intentionally preserves stock satposs() semantics: teph is
+     * the observation receive epoch, while orbit/clock propagation still occurs
+     * at transmit time. */
     raw_transmit_time=timeadd(receive_time,-pseudorange_m/CLIGHT);
+    selection_time=required_message_mask?raw_transmit_time:receive_time;
 
     memset(&eph,0,sizeof(eph));
     memset(&geph,0,sizeof(geph));
     memset(&selected_info,0,sizeof(selected_info));
-    stat=rtklib_signal_ephemeris_ext(raw_transmit_time,sat,code,
+    stat=rtklib_signal_ephemeris_ext(selection_time,sat,code,
                                      required_message_mask,nav,&eph,&geph,
                                      &selected_info);
     if (stat<=0) return stat;
