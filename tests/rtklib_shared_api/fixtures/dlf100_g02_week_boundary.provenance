@@ -1,0 +1,36 @@
+{
+  "fixture": "dlf100_g02_week_boundary.rnx",
+  "selection_policy": "RINEX 3.03 header lines 1-12 and the complete G02 record lines 13-20 copied byte-for-byte from the source; no navigation field was edited or synthesized.",
+  "source": {
+    "file": "DLF100NLD_R_20181610000_01D_MN.rnx",
+    "sha256": "0adfdef3b36cbd965dfb6f87be4f4fe88a7a5a97472058071a61280bb01aa0f7",
+    "url": "https://gnss1.tudelft.nl/dpga/rinex/daily/2018/161/DLF100NLD_R_20181610000_01D_MN.rnx.gz",
+    "station_url": "https://gnss1.tudelft.nl/dpga/station/Delft.html",
+    "rinex_version": "3.03"
+  },
+  "license_note": "No license assertion is made by this fixture provenance.",
+  "source_header": {
+    "line_start": 1,
+    "line_end": 12,
+    "byte_start": 0,
+    "byte_end_exclusive": 924,
+    "sha256": "3a1fde7eff7c005f09c6941a77f6752d6d65ff1c00b7dc126325a3b28104ca0d"
+  },
+  "source_record": {
+    "record_header": "G02 GPS LNAV",
+    "line_start": 13,
+    "line_end": 20,
+    "byte_start": 924,
+    "byte_end_exclusive": 1534,
+    "block_sha256": "49d98f98478125bcfa95023bfc9d6b43ab332a259b152dddca402ddac1bd8f78",
+    "raw_broadcast_week": 2005,
+    "raw_toe_sow": 0.0,
+    "raw_transmit_sow": 598206.0,
+    "parsed_toc": "GPS 2005/0.000000",
+    "parsed_toe": "GPS 2005/0.000000",
+    "parsed_transmit_time": "GPS 2004/598206.000000",
+    "normalization_seconds": -604800.0
+  },
+  "fixture_sha256": "40bf0008964a62776e2474794eced23ec66d31c781e2e282e67cfbe10eaaeda3",
+  "fixture_bytes": 1534
+}

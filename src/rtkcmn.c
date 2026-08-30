@@ -113,6 +113,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdarg.h>
 #include <ctype.h>
+#include <limits.h>
+#include <stdint.h>
 #ifndef WIN32
 #include <dirent.h>
 #include <time.h>
@@ -1356,9 +1358,10 @@ extern void time2epoch(gtime_t t, double *ep)
 extern gtime_t gpst2time(int week, double sec)
 {
     gtime_t t=epoch2time(gpst0);
+    int64_t week_seconds=(int64_t)86400*7*(int64_t)week;
     
     if (sec<-1E9||1E9<sec) sec=0.0;
-    t.time+=86400*7*week+(int)sec;
+    t.time+=(time_t)week_seconds+(int)sec;
     t.sec=sec-(int)sec;
     return t;
 }
@@ -1386,9 +1389,10 @@ extern double time2gpst(gtime_t t, int *week)
 extern gtime_t gst2time(int week, double sec)
 {
     gtime_t t=epoch2time(gst0);
+    int64_t week_seconds=(int64_t)86400*7*(int64_t)week;
     
     if (sec<-1E9||1E9<sec) sec=0.0;
-    t.time+=86400*7*week+(int)sec;
+    t.time+=(time_t)week_seconds+(int)sec;
     t.sec=sec-(int)sec;
     return t;
 }
@@ -1416,9 +1420,10 @@ extern double time2gst(gtime_t t, int *week)
 extern gtime_t bdt2time(int week, double sec)
 {
     gtime_t t=epoch2time(bdt0);
+    int64_t week_seconds=(int64_t)86400*7*(int64_t)week;
     
     if (sec<-1E9||1E9<sec) sec=0.0;
-    t.time+=86400*7*week+(int)sec;
+    t.time+=(time_t)week_seconds+(int)sec;
     t.sec=sec-(int)sec;
     return t;
 }
@@ -4051,19 +4056,20 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
 static const geph_t *select_signal_geph(gtime_t time, int sat,
                                         unsigned char code,
                                         int required_message_mask,
-                                        const nav_t *nav, int *message_type)
+                                        const nav_t *nav, int required_fcn,
+                                        int *message_type)
 {
     const geph_t *best=NULL;
     double best_age=0.0;
-    int i,type,compatible;
+    int i,type;
     if (!nav) return NULL;
     for (i=0;i<nav->ng;i++) {
         double age;
         if (nav->geph[i].sat!=sat) continue;
         type=nav->geph[i].hdr.msg_type?nav->geph[i].hdr.msg_type:NAV_FDMA;
-        compatible=code==CODE_L3Q?type==NAV_L3OC:
-                   (code==CODE_L1C||code==CODE_L2C)?type==NAV_FDMA:0;
-        if (!compatible) continue;
+        if (required_fcn != INT_MIN && nav->geph[i].frq != required_fcn)
+            continue;
+        if (!rtklib_signal_code_supported_ext(SYS_GLO,type,code)) continue;
         if (required_message_mask&&!(type&required_message_mask)) continue;
         age=fabs(timediff(nav->geph[i].toe,time));
         if (age>MAXDTOE_GLO) continue;
@@ -4077,10 +4083,165 @@ static const geph_t *select_signal_geph(gtime_t time, int sat,
     return best;
 }
 
+int rtklib_signal_code_supported_ext(int system, int message_type,
+                                     unsigned char code)
+{
+    if (system==SYS_GLO) {
+        return (code==CODE_L3Q && message_type==NAV_L3OC) ||
+               ((code==CODE_L1C || code==CODE_L2C) &&
+                message_type==NAV_FDMA);
+    }
+    return eph_supports_code(system,message_type,code);
+}
+
+int rtklib_signal_family_mask_ext(int system, unsigned char code)
+{
+    static const int families[] = {
+        NAV_LNAV,NAV_FDMA,NAV_FNAV,NAV_INAV,NAV_D1,NAV_D2,NAV_SBAS,
+        NAV_CNAV,NAV_CNV1,NAV_CNV2,NAV_CNV3,NAV_D1D2,NAV_IFNV,NAV_CNVX,
+        NAV_L1NV,NAV_L1OC,NAV_L3OC,NAV_LXOC
+    };
+    int mask=0,i;
+    for (i=0;i<(int)(sizeof(families)/sizeof(families[0]));i++) {
+        if (rtklib_signal_code_supported_ext(system,families[i],code))
+            mask|=families[i];
+    }
+    return mask;
+}
+
+int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
+                                    int required_message_mask, int required_fcn,
+                                    const nav_t *nav, int *eph_index,
+                                    int *geph_index, int *message_type)
+{
+    const eph_t *eph=NULL;
+    const geph_t *geph=NULL;
+    int sys,i,type=0;
+
+    if (eph_index) *eph_index=-1;
+    if (geph_index) *geph_index=-1;
+    if (message_type) *message_type=0;
+    if (!nav || !eph_index || !geph_index || !message_type ||
+        sat<=0 || sat>MAXSAT || code==CODE_NONE) return -1;
+    sys=satsys(sat,NULL);
+    if (sys==SYS_NONE) return -1;
+    if (sys==SYS_GLO) {
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,
+                                required_fcn,&type);
+        if (!geph) return 0;
+        for (i=0;i<nav->ng;i++) if (nav->geph+i==geph) {
+            *geph_index=i;
+            *message_type=type;
+            return 1;
+        }
+    } else {
+        eph=required_message_mask ?
+            select_signal_eph(time,sat,code,required_message_mask,nav,&type) :
+            select_generic_eph(time,sat,nav,&type);
+        if (!eph) return 0;
+        for (i=0;i<nav->n;i++) if (nav->eph+i==eph) {
+            *eph_index=i;
+            *message_type=type;
+            return 1;
+        }
+    }
+    return -1;
+}
+
 static double freq_ratio_squared(double reference_hz, double signal_hz)
 {
     double ratio=reference_hz/signal_hz;
     return ratio*ratio;
+}
+
+static int signal_code_bias_selected(int sys, int type, unsigned char code,
+                                     const eph_t *eph, const geph_t *geph,
+                                     double *bias)
+{
+    if (!bias) return -1;
+    if (sys==SYS_GLO) {
+        if (!geph) return 0;
+        if (code==CODE_L1C && type==NAV_FDMA) *bias=0.0;
+        else if (code==CODE_L2C && type==NAV_FDMA) *bias=CLIGHT*geph->dtaun;
+        else if (code==CODE_L3Q && type==NAV_L3OC)
+            *bias=-CLIGHT*geph->isc_l3ocp;
+        else return 0;
+        return 1;
+    }
+    if (!eph) return 0;
+    if (sys==SYS_GPS||sys==SYS_QZS) {
+        if (type==NAV_LNAV) {
+            if (code==CODE_L1C) *bias=CLIGHT*eph->tgd[0];
+            else if (code==CODE_L2P) {
+                *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ2)*eph->tgd[0];
+            }
+            else return 0;
+        }
+        else {
+            if (code==CODE_L1C) *bias=CLIGHT*(eph->tgd[0]-eph->isc[0]);
+            else if (code==CODE_L1L) *bias=CLIGHT*(eph->tgd[0]-eph->isc[5]);
+            else if (code==CODE_L2S) *bias=CLIGHT*(eph->tgd[0]-eph->isc[1]);
+            else if (code==CODE_L5Q) *bias=CLIGHT*(eph->tgd[0]-eph->isc[3]);
+            else return 0;
+        }
+    }
+    else if (sys==SYS_GAL) {
+        if (code==CODE_L1C) {
+            if (type==NAV_FNAV) *bias=CLIGHT*eph->tgd[0];
+            else if (type==NAV_INAV) *bias=CLIGHT*eph->tgd[1];
+            else return 0;
+        }
+        else if (code==CODE_L5Q&&type==NAV_FNAV) {
+            *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ5)*eph->tgd[0];
+        }
+        else if (code==CODE_L7Q&&type==NAV_INAV) {
+            *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ7)*eph->tgd[1];
+        }
+        else return 0;
+    }
+    else if (sys==SYS_CMP) {
+        if (type==NAV_D1D2||type==NAV_D1||type==NAV_D2) {
+            if (code==CODE_L2I) *bias=CLIGHT*eph->tgd[0];
+            else if (code==CODE_L7I) *bias=CLIGHT*eph->tgd[1];
+            else if (code==CODE_L6I) *bias=0.0;
+            else return 0;
+        }
+        else if (type==NAV_CNV1||type==NAV_CNV2) {
+            if (code==CODE_L1P) *bias=CLIGHT*eph->tgd[0];
+            else if (code==CODE_L5P) *bias=CLIGHT*eph->tgd[1];
+            else return 0;
+        }
+        else if (type==NAV_CNV3&&code==CODE_L7D) *bias=CLIGHT*eph->tgd[0];
+        else return 0;
+    }
+    else return 0;
+    return isfinite(*bias)?1:0;
+}
+
+int rtklib_signal_code_bias_selected_ext(int system, int message_type,
+                                         unsigned char code,
+                                         const eph_t *eph, const geph_t *geph,
+                                         double *raw_code_bias_m,
+                                         rtklib_signal_bias_info_ext_t *info)
+{
+    double bias=0.0;
+    int stat;
+
+    if (!raw_code_bias_m || code==CODE_NONE || system==SYS_NONE ||
+        (system==SYS_GLO ? (!geph || eph!=NULL) :
+         (!eph || geph!=NULL))) return -1;
+    if (!rtklib_signal_code_supported_ext(system,message_type,code)) return 0;
+    stat=signal_code_bias_selected(system,message_type,code,eph,geph,&bias);
+    if (stat<=0) return stat;
+    *raw_code_bias_m=bias;
+    if (info) {
+        memset(info,0,sizeof(*info));
+        info->system=system;
+        info->message_type=message_type;
+        info->iode=system==SYS_GLO?geph->iode:eph->iode;
+        info->raw_code_bias_m=bias;
+    }
+    return 1;
 }
 
 int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
@@ -4091,7 +4252,7 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
     const eph_t *eph;
     const geph_t *geph;
     double bias=0.0;
-    int sys,type=0;
+    int sys,type=0,stat;
 
     if (!nav||!raw_code_bias_m||sat<=0||sat>MAXSAT||code==CODE_NONE) return -1;
     sys=satsys(sat,NULL);
@@ -4099,80 +4260,20 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
     if (info) memset(info,0,sizeof(*info));
 
     if (sys==SYS_GLO) {
-        geph=select_signal_geph(time,sat,code,required_message_mask,nav,&type);
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,
+                                INT_MIN,&type);
         if (!geph) return 0;
-        if (code==CODE_L1C) bias=0.0;
-        else if (code==CODE_L2C) bias=CLIGHT*geph->dtaun;
-        else if (code==CODE_L3Q) bias=-CLIGHT*geph->isc_l3ocp;
-        else return 0;
-        if (info) {
-            info->system=sys;
-            info->message_type=type;
-            info->iode=geph->iode;
-            info->raw_code_bias_m=bias;
-        }
-        *raw_code_bias_m=bias;
-        return 1;
+        stat=rtklib_signal_code_bias_selected_ext(sys,type,code,NULL,geph,
+                                                  &bias,info);
+        if (stat<=0) return stat;
+    } else {
+        eph=select_signal_eph(time,sat,code,required_message_mask,nav,&type);
+        if (!eph) return 0;
+        stat=rtklib_signal_code_bias_selected_ext(sys,type,code,eph,NULL,
+                                                  &bias,info);
+        if (stat<=0) return stat;
     }
 
-    eph=select_signal_eph(time,sat,code,required_message_mask,nav,&type);
-    if (!eph) return 0;
-
-    if (sys==SYS_GPS||sys==SYS_QZS) {
-        if (type==NAV_LNAV) {
-            if (code==CODE_L1C) bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L2P) {
-                bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ2)*eph->tgd[0];
-            }
-            else return 0;
-        }
-        else {
-            if (code==CODE_L1C) bias=CLIGHT*(eph->tgd[0]-eph->isc[0]);
-            else if (code==CODE_L1L) bias=CLIGHT*(eph->tgd[0]-eph->isc[5]);
-            else if (code==CODE_L2S) bias=CLIGHT*(eph->tgd[0]-eph->isc[1]);
-            else if (code==CODE_L5Q) bias=CLIGHT*(eph->tgd[0]-eph->isc[3]);
-            else return 0;
-        }
-    }
-    else if (sys==SYS_GAL) {
-        if (code==CODE_L1C) {
-            if (type==NAV_FNAV) bias=CLIGHT*eph->tgd[0];
-            else if (type==NAV_INAV) bias=CLIGHT*eph->tgd[1];
-            else return 0;
-        }
-        else if (code==CODE_L5Q&&type==NAV_FNAV) {
-            bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ5)*eph->tgd[0];
-        }
-        else if (code==CODE_L7Q&&type==NAV_INAV) {
-            bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ7)*eph->tgd[1];
-        }
-        else return 0;
-    }
-    else if (sys==SYS_CMP) {
-        if (type==NAV_D1D2||type==NAV_D1||type==NAV_D2) {
-            if (code==CODE_L2I) bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L7I) bias=CLIGHT*eph->tgd[1];
-            else if (code==CODE_L6I) bias=0.0;
-            else return 0;
-        }
-        else if (type==NAV_CNV1||type==NAV_CNV2) {
-            if (code==CODE_L1P) bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L5P) bias=CLIGHT*eph->tgd[1];
-            else return 0;
-        }
-        else if (type==NAV_CNV3&&code==CODE_L7D) {
-            bias=CLIGHT*eph->tgd[0];
-        }
-        else return 0;
-    }
-    else return 0;
-
-    if (info) {
-        info->system=sys;
-        info->message_type=type;
-        info->iode=eph->iode;
-        info->raw_code_bias_m=bias;
-    }
     *raw_code_bias_m=bias;
     return 1;
 }
@@ -4197,7 +4298,8 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
     if (info) memset(info,0,sizeof(*info));
 
     if (sys==SYS_GLO) {
-        geph=select_signal_geph(time,sat,code,required_message_mask,nav,&type);
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,
+                                INT_MIN,&type);
         if (!geph) return 0;
         *geph_out=*geph;
         if (info) {
