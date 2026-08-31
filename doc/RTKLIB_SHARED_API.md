@@ -48,6 +48,33 @@ unsupported or fails.  The adapter does not silently reselect or fall back.
 When no explicit record is supplied, RTKLIB's declared selection policy is
 used; receiver-log latest-received policy is not made a global RTKLIB default.
 
+For Phase A, a selected GPS or QZSS `CNAV`/`CNV2` ephemeris is an explicit
+unsupported state-query result because its URAI components do not define the
+legacy metric-SVA variance published by this ABI.  The query returns
+`RTKLIB_SHARED_UNSUPPORTED` and `result.status == QUERY_UNSUPPORTED`;
+`state_valid` is zero and `position_ecef_m`, `velocity_ecef_mps`,
+`clock_bias_s`, `clock_drift_sps`, and `variance_m2` remain NaN.  The selected
+record identity, including source and health fields, is still returned.  No
+other record is selected as a fallback, including a legacy LNAV record.  A
+state query for the same selected record therefore remains distinct from the
+independent bias query, which keeps its existing selected-record mapping.
+
+This Phase A containment applies only to the public
+`rtklib_shared_state_query()` result.  It does not change or claim to contain
+the private `rtklib_signal_state_ext()` path or the private residual/Doppler
+wrappers.  Those paths still expose the legacy `eph2pos()` variance output;
+after the modern parser's negative sentinel this is RTKLIB's existing unknown
+fallback `6144^2 m^2`.  The current residual and Doppler implementations do
+not consume that returned variance (`src/rtklib_residual_ext.c:12-23` and
+`:135-193`); this PR makes no claim of whole-RTKLIB variance containment.  The
+private `satposs()` path can still receive that `6144^2 m^2` fallback and may
+pass it into the full RTKLIB weighting paths used by `pntpos()`, PPP and RTK.
+The shared archive target in `lib/rtklib_shared/gcc/makefile` does not include
+`pntpos.c` and this Phase A boundary provides no control for those private
+consumers.  Phase A therefore does not solve the complete RTKLIB/PVT weighting
+risk; an application using those consumers must not treat this public state
+API containment as proof that the complete private path is safe.
+
 ## Time, units and source mapping
 
 `rtklib_shared_time_t` is GPST week in `[0,RTKLIB_SHARED_MAX_WEEK]` plus
@@ -137,6 +164,32 @@ fixture and the shared path reports `4.0 m^2`; the current Analyzer does not
 consume `variance_m2`.  This contract clarification changes neither runtime
 navigation behavior nor the public ABI layout, so ABI version 1.0 is
 unchanged.
+
+The legacy metric-SVA rule above does not apply to GPS/QZSS modern `CNAV` or
+`CNV2`.  Their `urai_ned` and `urai_ed` values remain raw decoder-native
+components.  The RINEX 4 modern decoder clears the private legacy `eph_t.sva`
+slot to RTKLIB's negative unknown sentinel for these families so an URAI
+component cannot be consumed as a metric or as a URA table index.  No
+URAI-to-metre conversion or composite accuracy evaluator is defined in Phase
+A.  GPS/QZSS modern P1 handling, Galileo modern SISA, BDS CNV1/CNV2/CNV3
+SISAI, GLONASS, and SBAS accuracy semantics are outside this contract.
+
+This Phase A containment applies only to the public
+`rtklib_shared_state_query()` result.  It does not change or claim to contain
+the private `rtklib_signal_state_ext()` path or the private residual/Doppler
+wrappers.  Those paths still expose the legacy `eph2pos()` variance output;
+after the modern parser's negative sentinel this is RTKLIB's existing unknown
+fallback `6144^2 m^2`.  The current residual and Doppler implementations do
+not consume that returned variance (`src/rtklib_residual_ext.c:12-23` and
+`:135-193`); this contract makes no claim of whole-RTKLIB variance
+containment.  The private `satposs()` path can still receive that `6144^2 m^2`
+fallback and may pass it into the full RTKLIB weighting paths used by
+`pntpos()`, PPP and RTK.  The shared archive target in
+`lib/rtklib_shared/gcc/makefile` does not include `pntpos.c`, and this Phase A
+boundary provides no control for those private consumers.  Phase A therefore
+does not solve the complete RTKLIB/PVT weighting risk; an application using
+those consumers must not treat this public state API containment as proof that
+the complete private path is safe.
 
 The raw code-bias result follows the existing RTKLIB extension convention:
 

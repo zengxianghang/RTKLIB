@@ -214,7 +214,14 @@ typedef struct {
 
 这非常重要，因为 RINEX 4 同一颗卫星可以有不同的 navigation message type，同一数组槽位在不同 message type 下可能具有不同物理意义。
 
-`eph_t.sva` 遵循编译时 `URA2URAI` 约定：`URA2URAI=0` 时保留 RINEX 中以米表示的精度值，`URA2URAI=1` 时转换为 RTKLIB 的 URA index。
+对于适用的传统 EPH 消息，`eph_t.sva` 遵循编译时 `URA2URAI` 约定：
+`URA2URAI=0` 时保留 RINEX 中以米表示的精度值，`URA2URAI=1` 时转换为
+RTKLIB 的 URA index。GPS/QZSS 现代 `CNAV`/`CNV2` 是例外：其 accuracy
+字段是 raw URAI 分量，不是 metric SVA；decoder 保留 `urai_ned[]` 和
+`urai_ed`，并将传统 `eph_t.sva` 槽设为负的 unknown sentinel。该例外不套用
+到 BDS、传统 GPS/QZSS、GLONASS 或 SBAS。当前 shared build 固定使用
+`URA2URAI=0`；`URA2URAI=1` 不是当前 shared contract 的 supported/tested
+配置。
 
 ### 7.2 支持识别的 record type
 
@@ -578,6 +585,14 @@ satellite + IODE
 `decode_rnx4_eph()` 先执行传统 GPS 公共字段赋值，再覆盖 CNAV/CNV2 专用字段。
 
 因此对 CNAV/CNV2，不能默认 `iode/iodc/code/flag/fit` 等所有传统成员都与 LNAV 具有完全相同的语义。使用新导航消息时应优先依据 `hdr.msg_type` 和对应专用字段。
+
+对 GPS/QZSS `CNAV`/`CNV2`，`data[23]` 是 `URAI-ED`，而不是传统
+`eph_t.sva` 的米值；`data[21]`、`data[22]`、`data[26]` 是 raw
+`URAI-NED` 分量。`decode_rnx4_eph()` 会在保存这些 raw 字段后把
+`eph_t.sva` 设为负的 unknown sentinel，避免该分量进入旧的 metric/URA
+方差路径。这里不定义 URAI 到米的转换，也不实现 composite accuracy
+evaluator。BDS `CNV1`/`CNV2`/`CNV3` 的 SISAI、传统 GPS/QZSS LNAV、
+GLONASS 和 SBAS 使用各自的字段契约，不能套用此例外。
 
 ### 13.5 STO、EOP 和 ION 的字段存在性
 
