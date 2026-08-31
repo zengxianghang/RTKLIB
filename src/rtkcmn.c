@@ -113,6 +113,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdarg.h>
 #include <ctype.h>
+#include <limits.h>
+#include <stdint.h>
 #ifndef WIN32
 #include <dirent.h>
 #include <time.h>
@@ -1356,9 +1358,10 @@ extern void time2epoch(gtime_t t, double *ep)
 extern gtime_t gpst2time(int week, double sec)
 {
     gtime_t t=epoch2time(gpst0);
+    int64_t week_seconds=(int64_t)86400*7*(int64_t)week;
     
     if (sec<-1E9||1E9<sec) sec=0.0;
-    t.time+=86400*7*week+(int)sec;
+    t.time+=(time_t)week_seconds+(int)sec;
     t.sec=sec-(int)sec;
     return t;
 }
@@ -1386,9 +1389,10 @@ extern double time2gpst(gtime_t t, int *week)
 extern gtime_t gst2time(int week, double sec)
 {
     gtime_t t=epoch2time(gst0);
+    int64_t week_seconds=(int64_t)86400*7*(int64_t)week;
     
     if (sec<-1E9||1E9<sec) sec=0.0;
-    t.time+=86400*7*week+(int)sec;
+    t.time+=(time_t)week_seconds+(int)sec;
     t.sec=sec-(int)sec;
     return t;
 }
@@ -1416,9 +1420,10 @@ extern double time2gst(gtime_t t, int *week)
 extern gtime_t bdt2time(int week, double sec)
 {
     gtime_t t=epoch2time(bdt0);
+    int64_t week_seconds=(int64_t)86400*7*(int64_t)week;
     
     if (sec<-1E9||1E9<sec) sec=0.0;
-    t.time+=86400*7*week+(int)sec;
+    t.time+=(time_t)week_seconds+(int)sec;
     t.sec=sec-(int)sec;
     return t;
 }
@@ -3078,53 +3083,132 @@ extern int execcmd(const char *cmd)
 * return : number of expanded file paths
 * notes  : the order of expanded files is alphabetical order
 *-----------------------------------------------------------------------------*/
+/* Return the length only when a NUL terminator occurs within the destination
+ * path contract.  expath() is used by readrnx() with fixed-size path
+ * buffers, so accepting an unterminated input or a concatenated result that
+ * does not fit would turn a long legal-looking glob into a truncated path. */
+static int bounded_path_length(const char *path, size_t limit, size_t *length)
+{
+    size_t i;
+
+    if (!path || !length || limit == 0) return 0;
+    for (i = 0; i < limit; ++i) {
+        if (path[i] == '\0') {
+            *length = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int bounded_path_pattern(char *pattern, size_t capacity,
+                                const char *text)
+{
+    size_t length;
+
+    /* '^' + text + '$' + NUL must fit. */
+    if (!pattern || capacity < 3 ||
+        !bounded_path_length(text, capacity - 2, &length) ||
+        length + 3 > capacity) return 0;
+    pattern[0] = '^';
+    memcpy(pattern + 1, text, length);
+    pattern[length + 1] = '$';
+    pattern[length + 2] = '\0';
+    return 1;
+}
+
 extern int expath(const char *path, char *paths[], int nmax)
 {
     int i,j,n=0;
-    char tmp[1024];
+    size_t path_len;
+    char tmp[MAXSTRPATH];
+
+    if (!paths || nmax <= 0 || !bounded_path_length(path, MAXSTRPATH,
+                                                     &path_len) ||
+        path_len == 0) return 0;
 #ifdef WIN32
     WIN32_FIND_DATA file;
     HANDLE h;
-    char dir[1024]="",*p;
+    char dir[MAXSTRPATH]="",*p;
+    size_t dir_len = 0, name_len;
     
     rtktrace(3,"expath  : path=%s nmax=%d\n",path,nmax);
     
     if ((p=strrchr(path,'\\'))) {
-        strncpy(dir,path,p-path+1); dir[p-path+1]='\0';
+        dir_len = (size_t)(p - path) + 1;
+        if (dir_len >= MAXSTRPATH) return 0;
+        memcpy(dir,path,dir_len); dir[dir_len]='\0';
     }
     if ((h=FindFirstFile((LPCTSTR)path,&file))==INVALID_HANDLE_VALUE) {
-        strcpy(paths[0],path);
+        if (!paths[0]) return 0;
+        memcpy(paths[0],path,path_len + 1);
         return 1;
     }
-    sprintf(paths[n++],"%s%s",dir,file.cFileName);
+    if (!bounded_path_length(file.cFileName, MAXSTRPATH, &name_len) ||
+        dir_len > MAXSTRPATH - 1 - name_len || !paths[n]) {
+        FindClose(h);
+        return 0;
+    }
+    memcpy(paths[n],dir,dir_len);
+    memcpy(paths[n] + dir_len,file.cFileName,name_len + 1);
+    n++;
     while (FindNextFile(h,&file)&&n<nmax) {
         if (file.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) continue;
-        sprintf(paths[n++],"%s%s",dir,file.cFileName);
+        if (!bounded_path_length(file.cFileName, MAXSTRPATH, &name_len) ||
+            dir_len > MAXSTRPATH - 1 - name_len || !paths[n]) {
+            FindClose(h);
+            return 0;
+        }
+        memcpy(paths[n],dir,dir_len);
+        memcpy(paths[n] + dir_len,file.cFileName,name_len + 1);
+        n++;
     }
     FindClose(h);
 #else
     struct dirent *d;
     DIR *dp;
     const char *file=path;
-    char dir[1024]="",s1[1024],s2[1024],*p,*q,*r;
+    char dir[MAXSTRPATH]="",s1[MAXSTRPATH+3],s2[MAXSTRPATH+3],*p,*q,*r;
+    size_t dir_len = 0, file_len, name_len;
     
     rtktrace(3,"expath  : path=%s nmax=%d\n",path,nmax);
     
     if ((p=strrchr(path,'/'))||(p=strrchr(path,'\\'))) {
-        file=p+1; strncpy(dir,path,p-path+1); dir[p-path+1]='\0';
+        dir_len = (size_t)(p - path) + 1;
+        if (dir_len >= MAXSTRPATH) return 0;
+        file=p+1; memcpy(dir,path,dir_len); dir[dir_len]='\0';
     }
+    if (!bounded_path_length(file, MAXSTRPATH, &file_len)) return 0;
     if (!(dp=opendir(*dir?dir:"."))) return 0;
     while ((d=readdir(dp))) {
         if (*(d->d_name)=='.') continue;
-        sprintf(s1,"^%s$",d->d_name);
-        sprintf(s2,"^%s$",file);
+        if (!bounded_path_pattern(s1,sizeof(s1),d->d_name) ||
+            !bounded_path_pattern(s2,sizeof(s2),file)) {
+            closedir(dp);
+            return 0;
+        }
         for (p=s1;*p;p++) *p=(char)tolower((int)*p);
         for (p=s2;*p;p++) *p=(char)tolower((int)*p);
         
         for (p=s1,q=strtok_r(s2,"*",&r);q;q=strtok_r(NULL,"*",&r)) {
             if ((p=strstr(p,q))) p+=strlen(q); else break;
         }
-        if (p&&n<nmax) sprintf(paths[n++],"%s%s",dir,d->d_name);
+        if (p) {
+            if (!bounded_path_length(d->d_name, MAXSTRPATH, &name_len) ||
+                dir_len > MAXSTRPATH - 1 - name_len) {
+                closedir(dp);
+                return 0;
+            }
+            if (n < nmax) {
+                if (!paths[n]) {
+                    closedir(dp);
+                    return 0;
+                }
+                memcpy(paths[n],dir,dir_len);
+                memcpy(paths[n] + dir_len,d->d_name,name_len + 1);
+                n++;
+            }
+        }
     }
     closedir(dp);
 #endif
@@ -4051,19 +4135,20 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
 static const geph_t *select_signal_geph(gtime_t time, int sat,
                                         unsigned char code,
                                         int required_message_mask,
-                                        const nav_t *nav, int *message_type)
+                                        const nav_t *nav, int required_fcn,
+                                        int *message_type)
 {
     const geph_t *best=NULL;
     double best_age=0.0;
-    int i,type,compatible;
+    int i,type;
     if (!nav) return NULL;
     for (i=0;i<nav->ng;i++) {
         double age;
         if (nav->geph[i].sat!=sat) continue;
         type=nav->geph[i].hdr.msg_type?nav->geph[i].hdr.msg_type:NAV_FDMA;
-        compatible=code==CODE_L3Q?type==NAV_L3OC:
-                   (code==CODE_L1C||code==CODE_L2C)?type==NAV_FDMA:0;
-        if (!compatible) continue;
+        if (required_fcn != INT_MIN && nav->geph[i].frq != required_fcn)
+            continue;
+        if (!rtklib_signal_code_supported_ext(SYS_GLO,type,code)) continue;
         if (required_message_mask&&!(type&required_message_mask)) continue;
         age=fabs(timediff(nav->geph[i].toe,time));
         if (age>MAXDTOE_GLO) continue;
@@ -4077,10 +4162,165 @@ static const geph_t *select_signal_geph(gtime_t time, int sat,
     return best;
 }
 
+int rtklib_signal_code_supported_ext(int system, int message_type,
+                                     unsigned char code)
+{
+    if (system==SYS_GLO) {
+        return (code==CODE_L3Q && message_type==NAV_L3OC) ||
+               ((code==CODE_L1C || code==CODE_L2C) &&
+                message_type==NAV_FDMA);
+    }
+    return eph_supports_code(system,message_type,code);
+}
+
+int rtklib_signal_family_mask_ext(int system, unsigned char code)
+{
+    static const int families[] = {
+        NAV_LNAV,NAV_FDMA,NAV_FNAV,NAV_INAV,NAV_D1,NAV_D2,NAV_SBAS,
+        NAV_CNAV,NAV_CNV1,NAV_CNV2,NAV_CNV3,NAV_D1D2,NAV_IFNV,NAV_CNVX,
+        NAV_L1NV,NAV_L1OC,NAV_L3OC,NAV_LXOC
+    };
+    int mask=0,i;
+    for (i=0;i<(int)(sizeof(families)/sizeof(families[0]));i++) {
+        if (rtklib_signal_code_supported_ext(system,families[i],code))
+            mask|=families[i];
+    }
+    return mask;
+}
+
+int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
+                                    int required_message_mask, int required_fcn,
+                                    const nav_t *nav, int *eph_index,
+                                    int *geph_index, int *message_type)
+{
+    const eph_t *eph=NULL;
+    const geph_t *geph=NULL;
+    int sys,i,type=0;
+
+    if (eph_index) *eph_index=-1;
+    if (geph_index) *geph_index=-1;
+    if (message_type) *message_type=0;
+    if (!nav || !eph_index || !geph_index || !message_type ||
+        sat<=0 || sat>MAXSAT || code==CODE_NONE) return -1;
+    sys=satsys(sat,NULL);
+    if (sys==SYS_NONE) return -1;
+    if (sys==SYS_GLO) {
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,
+                                required_fcn,&type);
+        if (!geph) return 0;
+        for (i=0;i<nav->ng;i++) if (nav->geph+i==geph) {
+            *geph_index=i;
+            *message_type=type;
+            return 1;
+        }
+    } else {
+        eph=required_message_mask ?
+            select_signal_eph(time,sat,code,required_message_mask,nav,&type) :
+            select_generic_eph(time,sat,nav,&type);
+        if (!eph) return 0;
+        for (i=0;i<nav->n;i++) if (nav->eph+i==eph) {
+            *eph_index=i;
+            *message_type=type;
+            return 1;
+        }
+    }
+    return -1;
+}
+
 static double freq_ratio_squared(double reference_hz, double signal_hz)
 {
     double ratio=reference_hz/signal_hz;
     return ratio*ratio;
+}
+
+static int signal_code_bias_selected(int sys, int type, unsigned char code,
+                                     const eph_t *eph, const geph_t *geph,
+                                     double *bias)
+{
+    if (!bias) return -1;
+    if (sys==SYS_GLO) {
+        if (!geph) return 0;
+        if (code==CODE_L1C && type==NAV_FDMA) *bias=0.0;
+        else if (code==CODE_L2C && type==NAV_FDMA) *bias=CLIGHT*geph->dtaun;
+        else if (code==CODE_L3Q && type==NAV_L3OC)
+            *bias=-CLIGHT*geph->isc_l3ocp;
+        else return 0;
+        return 1;
+    }
+    if (!eph) return 0;
+    if (sys==SYS_GPS||sys==SYS_QZS) {
+        if (type==NAV_LNAV) {
+            if (code==CODE_L1C) *bias=CLIGHT*eph->tgd[0];
+            else if (code==CODE_L2P) {
+                *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ2)*eph->tgd[0];
+            }
+            else return 0;
+        }
+        else {
+            if (code==CODE_L1C) *bias=CLIGHT*(eph->tgd[0]-eph->isc[0]);
+            else if (code==CODE_L1L) *bias=CLIGHT*(eph->tgd[0]-eph->isc[5]);
+            else if (code==CODE_L2S) *bias=CLIGHT*(eph->tgd[0]-eph->isc[1]);
+            else if (code==CODE_L5Q) *bias=CLIGHT*(eph->tgd[0]-eph->isc[3]);
+            else return 0;
+        }
+    }
+    else if (sys==SYS_GAL) {
+        if (code==CODE_L1C) {
+            if (type==NAV_FNAV) *bias=CLIGHT*eph->tgd[0];
+            else if (type==NAV_INAV) *bias=CLIGHT*eph->tgd[1];
+            else return 0;
+        }
+        else if (code==CODE_L5Q&&type==NAV_FNAV) {
+            *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ5)*eph->tgd[0];
+        }
+        else if (code==CODE_L7Q&&type==NAV_INAV) {
+            *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ7)*eph->tgd[1];
+        }
+        else return 0;
+    }
+    else if (sys==SYS_CMP) {
+        if (type==NAV_D1D2||type==NAV_D1||type==NAV_D2) {
+            if (code==CODE_L2I) *bias=CLIGHT*eph->tgd[0];
+            else if (code==CODE_L7I) *bias=CLIGHT*eph->tgd[1];
+            else if (code==CODE_L6I) *bias=0.0;
+            else return 0;
+        }
+        else if (type==NAV_CNV1||type==NAV_CNV2) {
+            if (code==CODE_L1P) *bias=CLIGHT*eph->tgd[0];
+            else if (code==CODE_L5P) *bias=CLIGHT*eph->tgd[1];
+            else return 0;
+        }
+        else if (type==NAV_CNV3&&code==CODE_L7D) *bias=CLIGHT*eph->tgd[0];
+        else return 0;
+    }
+    else return 0;
+    return isfinite(*bias)?1:0;
+}
+
+int rtklib_signal_code_bias_selected_ext(int system, int message_type,
+                                         unsigned char code,
+                                         const eph_t *eph, const geph_t *geph,
+                                         double *raw_code_bias_m,
+                                         rtklib_signal_bias_info_ext_t *info)
+{
+    double bias=0.0;
+    int stat;
+
+    if (!raw_code_bias_m || code==CODE_NONE || system==SYS_NONE ||
+        (system==SYS_GLO ? (!geph || eph!=NULL) :
+         (!eph || geph!=NULL))) return -1;
+    if (!rtklib_signal_code_supported_ext(system,message_type,code)) return 0;
+    stat=signal_code_bias_selected(system,message_type,code,eph,geph,&bias);
+    if (stat<=0) return stat;
+    *raw_code_bias_m=bias;
+    if (info) {
+        memset(info,0,sizeof(*info));
+        info->system=system;
+        info->message_type=message_type;
+        info->iode=system==SYS_GLO?geph->iode:eph->iode;
+        info->raw_code_bias_m=bias;
+    }
+    return 1;
 }
 
 int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
@@ -4091,7 +4331,7 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
     const eph_t *eph;
     const geph_t *geph;
     double bias=0.0;
-    int sys,type=0;
+    int sys,type=0,stat;
 
     if (!nav||!raw_code_bias_m||sat<=0||sat>MAXSAT||code==CODE_NONE) return -1;
     sys=satsys(sat,NULL);
@@ -4099,80 +4339,20 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
     if (info) memset(info,0,sizeof(*info));
 
     if (sys==SYS_GLO) {
-        geph=select_signal_geph(time,sat,code,required_message_mask,nav,&type);
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,
+                                INT_MIN,&type);
         if (!geph) return 0;
-        if (code==CODE_L1C) bias=0.0;
-        else if (code==CODE_L2C) bias=CLIGHT*geph->dtaun;
-        else if (code==CODE_L3Q) bias=-CLIGHT*geph->isc_l3ocp;
-        else return 0;
-        if (info) {
-            info->system=sys;
-            info->message_type=type;
-            info->iode=geph->iode;
-            info->raw_code_bias_m=bias;
-        }
-        *raw_code_bias_m=bias;
-        return 1;
+        stat=rtklib_signal_code_bias_selected_ext(sys,type,code,NULL,geph,
+                                                  &bias,info);
+        if (stat<=0) return stat;
+    } else {
+        eph=select_signal_eph(time,sat,code,required_message_mask,nav,&type);
+        if (!eph) return 0;
+        stat=rtklib_signal_code_bias_selected_ext(sys,type,code,eph,NULL,
+                                                  &bias,info);
+        if (stat<=0) return stat;
     }
 
-    eph=select_signal_eph(time,sat,code,required_message_mask,nav,&type);
-    if (!eph) return 0;
-
-    if (sys==SYS_GPS||sys==SYS_QZS) {
-        if (type==NAV_LNAV) {
-            if (code==CODE_L1C) bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L2P) {
-                bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ2)*eph->tgd[0];
-            }
-            else return 0;
-        }
-        else {
-            if (code==CODE_L1C) bias=CLIGHT*(eph->tgd[0]-eph->isc[0]);
-            else if (code==CODE_L1L) bias=CLIGHT*(eph->tgd[0]-eph->isc[5]);
-            else if (code==CODE_L2S) bias=CLIGHT*(eph->tgd[0]-eph->isc[1]);
-            else if (code==CODE_L5Q) bias=CLIGHT*(eph->tgd[0]-eph->isc[3]);
-            else return 0;
-        }
-    }
-    else if (sys==SYS_GAL) {
-        if (code==CODE_L1C) {
-            if (type==NAV_FNAV) bias=CLIGHT*eph->tgd[0];
-            else if (type==NAV_INAV) bias=CLIGHT*eph->tgd[1];
-            else return 0;
-        }
-        else if (code==CODE_L5Q&&type==NAV_FNAV) {
-            bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ5)*eph->tgd[0];
-        }
-        else if (code==CODE_L7Q&&type==NAV_INAV) {
-            bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ7)*eph->tgd[1];
-        }
-        else return 0;
-    }
-    else if (sys==SYS_CMP) {
-        if (type==NAV_D1D2||type==NAV_D1||type==NAV_D2) {
-            if (code==CODE_L2I) bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L7I) bias=CLIGHT*eph->tgd[1];
-            else if (code==CODE_L6I) bias=0.0;
-            else return 0;
-        }
-        else if (type==NAV_CNV1||type==NAV_CNV2) {
-            if (code==CODE_L1P) bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L5P) bias=CLIGHT*eph->tgd[1];
-            else return 0;
-        }
-        else if (type==NAV_CNV3&&code==CODE_L7D) {
-            bias=CLIGHT*eph->tgd[0];
-        }
-        else return 0;
-    }
-    else return 0;
-
-    if (info) {
-        info->system=sys;
-        info->message_type=type;
-        info->iode=eph->iode;
-        info->raw_code_bias_m=bias;
-    }
     *raw_code_bias_m=bias;
     return 1;
 }
@@ -4197,7 +4377,8 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
     if (info) memset(info,0,sizeof(*info));
 
     if (sys==SYS_GLO) {
-        geph=select_signal_geph(time,sat,code,required_message_mask,nav,&type);
+        geph=select_signal_geph(time,sat,code,required_message_mask,nav,
+                                INT_MIN,&type);
         if (!geph) return 0;
         *geph_out=*geph;
         if (info) {

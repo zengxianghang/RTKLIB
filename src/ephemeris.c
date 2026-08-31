@@ -87,15 +87,31 @@ static const char rcsid[]="$Id:$";
 
 #define MAX_ITER_KEPLER 30        /* max number of iteration of Kelpler */
 
-/* variance by ura ephemeris (ref [1] 20.3.3.3.1.1) --------------------------*/
+/* variance by URA index (ref [1] 20.3.3.3.1.1) ------------------------------
+ *
+ * seph_t.sva and eph_t.sva when URA2URAI=1 are indices.  The last valid
+ * table index is 14; index 15 is the out-of-range/unknown sentinel and must
+ * not be used to address this 15-element table.
+ */
 static double var_uraeph(int ura)
 {
     const double ura_value[]={   
         2.4,3.4,4.85,6.85,9.65,13.65,24.0,48.0,96.0,192.0,384.0,768.0,1536.0,
         3072.0,6144.0
     };
-    return ura<0||15<ura?SQR(6144.0):SQR(ura_value[ura]);
+    return ura<0||ura>=15?SQR(6144.0):SQR(ura_value[ura]);
 }
+#if !URA2URAI
+/* With the supported build configuration (URA2URAI=0), eph_t.sva is the
+ * decoded RINEX accuracy in metres.  Do not pass that metric value through
+ * the URA index table: a value such as 15 m is valid and means 225 m^2.
+ * Negative/non-finite values are RTKLIB's unknown/out-of-range sentinel. */
+static double var_svaeph(double sva_m)
+{
+    return !isfinite(sva_m) || sva_m < 0.0 ?
+        SQR(6144.0) : SQR(sva_m);
+}
+#endif
 /* variance by ura ssr (ref [4]) ---------------------------------------------*/
 static double var_urassr(int ura)
 {
@@ -245,8 +261,13 @@ extern void eph2pos(gtime_t time, const eph_t *eph, double *rs, double *dts,
     /* relativity correction */
     *dts-=2.0*sqrt(mu*eph->A)*eph->e*sinE/SQR(CLIGHT);
     
-    /* position and clock error variance */
+    /* position and clock error variance.  eph_t.sva is an index only when
+     * URA2URAI is enabled; the default build stores RINEX metres. */
+#if URA2URAI
     *var=var_uraeph(eph->sva);
+#else
+    *var=var_svaeph(eph->sva);
+#endif
 }
 /* glonass orbit differential equations --------------------------------------*/
 static void deq(const double *x, double *xdot, const double *acc)

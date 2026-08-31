@@ -41,6 +41,28 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
                                 double *raw_code_bias_m,
                                 rtklib_signal_bias_info_ext_t *info);
 
+/* Evaluate the same broadcast-bias mapping for an already selected record.
+ * This is an internal RTKLIB hook for the shared opaque adapter: it never
+ * performs another record selection. Exactly one of eph/geph is supplied. */
+int rtklib_signal_code_bias_selected_ext(int system, int message_type,
+                                         unsigned char code,
+                                         const eph_t *eph, const geph_t *geph,
+                                         double *raw_code_bias_m,
+                                         rtklib_signal_bias_info_ext_t *info);
+
+/* Existing RTKLIB family/code rules exposed as narrow adapter hooks. */
+int rtklib_signal_code_supported_ext(int system, int message_type,
+                                     unsigned char code);
+int rtklib_signal_family_mask_ext(int system, unsigned char code);
+
+/* Select an existing nav record and return its private-array index.  The
+ * caller can then bind several operations to that exact record.  required_fcn
+ * is INT_MIN for no FCN constraint; otherwise GLONASS FCN is matched exactly. */
+int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
+                                    int required_message_mask, int required_fcn,
+                                    const nav_t *nav, int *eph_index,
+                                    int *geph_index, int *message_type);
+
 /*
  * Select and copy the epoch/message-family broadcast ephemeris used by the
  * signal-specific bias and state paths. Exactly one of eph/geph is populated.
