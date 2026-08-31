@@ -48,6 +48,33 @@ unsupported or fails.  The adapter does not silently reselect or fall back.
 When no explicit record is supplied, RTKLIB's declared selection policy is
 used; receiver-log latest-received policy is not made a global RTKLIB default.
 
+For Phase A, a selected GPS or QZSS `CNAV`/`CNV2` ephemeris is an explicit
+unsupported state-query result because its URAI components do not define the
+legacy metric-SVA variance published by this ABI.  The query returns
+`RTKLIB_SHARED_UNSUPPORTED` and `result.status == QUERY_UNSUPPORTED`;
+`state_valid` is zero and `position_ecef_m`, `velocity_ecef_mps`,
+`clock_bias_s`, `clock_drift_sps`, and `variance_m2` remain NaN.  The selected
+record identity, including source and health fields, is still returned.  No
+other record is selected as a fallback, including a legacy LNAV record.  A
+state query for the same selected record therefore remains distinct from the
+independent bias query, which keeps its existing selected-record mapping.
+
+This Phase A containment applies only to the public
+`rtklib_shared_state_query()` result.  It does not change or claim to contain
+the private `rtklib_signal_state_ext()` path or the private residual/Doppler
+wrappers.  Those paths still expose the legacy `eph2pos()` variance output;
+after the modern parser's negative sentinel this is RTKLIB's existing unknown
+fallback `6144^2 m^2`.  The current residual and Doppler implementations do
+not consume that returned variance (`src/rtklib_residual_ext.c:12-23` and
+`:135-193`); this PR makes no claim of whole-RTKLIB variance containment.  The
+private `satposs()` path can still receive that `6144^2 m^2` fallback and may
+pass it into the full RTKLIB weighting paths used by `pntpos()`, PPP and RTK.
+The shared archive target in `lib/rtklib_shared/gcc/makefile` does not include
+`pntpos.c` and this Phase A boundary provides no control for those private
+consumers.  Phase A therefore does not solve the complete RTKLIB/PVT weighting
+risk; an application using those consumers must not treat this public state
+API containment as proof that the complete private path is safe.
+
 ## Time, units and source mapping
 
 `rtklib_shared_time_t` is GPST week in `[0,RTKLIB_SHARED_MAX_WEEK]` plus
@@ -85,12 +112,23 @@ The normalized orbit and clock fields map explicitly as follows:
 | `additional_mean_motion_rate_rad_s2` | `ndot` | radians/second², CNAV mean-motion rate |
 | `delta_n0_raw`, `top_raw`, `delta_n0_dot_raw`, `urai_*_raw`, `wn_op_raw`, `sisai_raw`, `int_flag_raw` | same named modern fields | decoder-native raw fields; no source-defined week or index is relabelled as a physical unit |
 
-This library is built with RTKLIB's `URA2URAI=0` configuration.  Accordingly,
-`eph_t.sva` and the public `sva_m` input are accuracy values in metres, and
-state `variance_m2` uses the square of that value.  The authoritative
-`ephemeris.c` path uses the URA lookup table only for builds where
-`URA2URAI=1`; the out-of-range URA index sentinel is never used as a table
-index.
+The legacy metric-SVA rule below does not apply to GPS/QZSS modern `CNAV` or
+`CNV2`.  Their `urai_ned` and `urai_ed` values remain raw decoder-native
+components.  The RINEX 4 modern decoder clears the private legacy `eph_t.sva` slot to
+RTKLIB's negative unknown sentinel for these families so an URAI component
+cannot be consumed as a metric or as a URA table index.  No URAI-to-metre
+conversion or composite accuracy evaluator is defined in Phase A.  GPS/QZSS
+modern P1 handling, Galileo modern SISA, BDS CNV1/CNV2/CNV3 SISAI, GLONASS,
+and SBAS accuracy semantics are outside this contract.
+
+The current shared build is fixed at RTKLIB's `URA2URAI=0` configuration
+(`src/rtklib.h:54`).  Accordingly, the legacy metric `eph_t.sva` and public
+`sva_m` input are accuracy values in metres, and state `variance_m2` uses the
+square of that value.  `URA2URAI=1` remains a compile-time alternative in the
+private RTKLIB code, but it is not a supported or tested configuration of this
+shared contract; this document makes no validation claim for it.  The
+`ephemeris.c` URA lookup table and its unknown-index fallback therefore remain
+outside the Phase A public modern-family contract.
 
 The raw code-bias result follows the existing RTKLIB extension convention:
 

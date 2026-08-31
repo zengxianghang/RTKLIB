@@ -1092,6 +1092,34 @@ static void init_bias_result(rtklib_shared_bias_result_t *result)
     init_identity(&result->identity);
 }
 
+/* GPS/QZSS CNAV accuracy fields are raw URAI components.  They do not carry
+ * the legacy metric-SVA contract consumed by eph2pos()'s variance output. */
+static int is_modern_gps_qzs_urai_record(const shared_record_t *record)
+{
+    if (!record || record->kind != RTKLIB_SHARED_RECORD_EPH) return 0;
+    if (record->identity.system != RTKLIB_SHARED_SYS_GPS &&
+        record->identity.system != RTKLIB_SHARED_SYS_QZS) return 0;
+    return record->identity.family == RTKLIB_SHARED_NAV_CNAV ||
+           record->identity.family == RTKLIB_SHARED_NAV_CNV2;
+}
+
+static void set_state_health(rtklib_shared_state_result_t *result,
+                             int system, uint32_t family, unsigned char code)
+{
+    int signal_health;
+
+    if (!result) return;
+    if (result->health_raw < 0) {
+        result->health = RTKLIB_SHARED_HEALTH_UNKNOWN;
+        return;
+    }
+    signal_health = rtklib_signal_health_ext(system, (int)family, code,
+                                             result->health_raw);
+    result->health = signal_health < 0 ? RTKLIB_SHARED_HEALTH_UNKNOWN :
+        signal_health == 0 ? RTKLIB_SHARED_HEALTH_HEALTHY :
+        RTKLIB_SHARED_HEALTH_UNHEALTHY;
+}
+
 static const shared_record_t *select_default_record(
     const rtklib_shared_nav_store_t *store,
     const rtklib_shared_state_query_t *query, int satellite)
@@ -1207,6 +1235,15 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
         const eph_t *eph;
         if (record->index < 0 || record->index >= store->nav.n) return 0;
         eph = &store->nav.eph[record->index];
+        if (is_modern_gps_qzs_urai_record(record)) {
+            /* The state query is deliberately all-or-nothing for this
+             * unsupported accuracy model.  Identity and health were bound
+             * by rtklib_shared_state_query() before reaching here; leave the
+             * initialized NaN state fields untouched and do not reselect. */
+            result->health_raw = eph->svh;
+            set_state_health(result, system, record->identity.family, code);
+            return RTKLIB_SHARED_UNSUPPORTED;
+        }
         eph2pos(time, eph, state, dts, &variance);
         eph2pos(next_time, eph, next_state, next_dts, &next_var);
         result->health_raw = eph->svh;
@@ -1232,15 +1269,7 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
     result->clock_drift_sps = (next_dts[0] - dts[0]) / 1E-3;
     result->variance_m2 = variance;
     result->state_valid = 1;
-    if (result->health_raw < 0) {
-        result->health = RTKLIB_SHARED_HEALTH_UNKNOWN;
-    } else {
-        int signal_health = rtklib_signal_health_ext(
-            system, (int)record->identity.family, code, result->health_raw);
-        result->health = signal_health < 0 ? RTKLIB_SHARED_HEALTH_UNKNOWN :
-            signal_health == 0 ? RTKLIB_SHARED_HEALTH_HEALTHY :
-            RTKLIB_SHARED_HEALTH_UNHEALTHY;
-    }
+    set_state_health(result, system, record->identity.family, code);
     return stat;
 }
 

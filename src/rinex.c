@@ -1250,6 +1250,13 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         eph->urai_ned[1] = data[22];
         eph->urai_ned[2] = data[26];
         eph->urai_ed = data[23];
+        /* CNAV/CNV2 data[23] is the raw URAI-ED component, not the
+         * legacy metric SVA stored in eph->sva.  The generic GPS/QZSS
+         * decoder above has already populated eph->sva from this field;
+         * clear that accidental cross-family value with RTKLIB's negative
+         * unknown sentinel.  Do not use NaN here: URA2URAI=1 passes eph->sva
+         * through an integer-index path. */
+        eph->sva = -1.0;
         eph->svh = (int)data[24];
         eph->tgd[0] = data[25];
         

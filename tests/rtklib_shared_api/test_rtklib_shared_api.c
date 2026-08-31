@@ -405,6 +405,35 @@ static int check_state(const rtklib_shared_nav_store_t *store,
                      identity->record_id);
     init_state_result(&result);
     stat = rtklib_shared_state_query(store, &query, &result);
+    if ((identity->system == RTKLIB_SHARED_SYS_GPS ||
+         identity->system == RTKLIB_SHARED_SYS_QZS) &&
+        (identity->family == RTKLIB_SHARED_NAV_CNAV ||
+         identity->family == RTKLIB_SHARED_NAV_CNV2)) {
+        /* Phase A deliberately makes the coupled state/variance query
+         * fail closed for modern URAI.  Keep the selected record visible,
+         * but do not publish a partial state that old consumers may mistake
+         * for a complete result.  Raw URAI and signal-health details are
+         * checked by the dedicated containment tests. */
+        CHECK(stat == RTKLIB_SHARED_UNSUPPORTED &&
+              result.status == RTKLIB_SHARED_QUERY_UNSUPPORTED,
+              "modern GPS/QZSS URAI state was published as available");
+        CHECK(result.state_valid == 0 &&
+              isnan(result.position_ecef_m[0]) &&
+              isnan(result.position_ecef_m[1]) &&
+              isnan(result.position_ecef_m[2]) &&
+              isnan(result.velocity_ecef_mps[0]) &&
+              isnan(result.velocity_ecef_mps[1]) &&
+              isnan(result.velocity_ecef_mps[2]) &&
+              isnan(result.clock_bias_s) &&
+              isnan(result.clock_drift_sps) &&
+              isnan(result.variance_m2),
+              "modern GPS/QZSS URAI state was not failed closed");
+        CHECK(result.identity.record_id == identity->record_id &&
+              result.identity.family == identity->family &&
+              expected_eph && result.health_raw == expected_eph->svh,
+              "modern selected identity or raw health was lost");
+        return 0;
+    }
     CHECK(stat == RTKLIB_SHARED_OK &&
           result.status == RTKLIB_SHARED_QUERY_AVAILABLE,
           "selected real NAV state is unavailable");
