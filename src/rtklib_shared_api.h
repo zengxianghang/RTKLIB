@@ -25,6 +25,16 @@ extern "C" {
  * historical int-sized whole-week-second interface. */
 #define RTKLIB_SHARED_MAX_WEEK (INT32_MAX / (7 * 86400))
 
+/* Stable RTKLIB observation-code byte values accepted by state/bias queries.
+ * The public signal query takes the corresponding two-character RINEX code.
+ * CODE_L1D is an extension value because the legacy RTKLIB table stops at
+ * MAXCODE=48; it is never used as an index into a legacy fixed-size array. */
+#define RTKLIB_SHARED_CODE_RINEX_1C 1u
+#define RTKLIB_SHARED_CODE_RINEX_1P 2u
+#define RTKLIB_SHARED_CODE_RINEX_1X 12u
+#define RTKLIB_SHARED_CODE_RINEX_2I 40u
+#define RTKLIB_SHARED_CODE_RINEX_1D 51u
+
 typedef struct rtklib_shared_nav_store rtklib_shared_nav_store_t;
 typedef uint64_t rtklib_shared_record_id_t;
 

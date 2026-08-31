@@ -236,6 +236,34 @@ helpers call the corresponding RTKLIB functions.  Broadcast ionosphere and
 Saastamoinen-family troposphere wrappers return explicit unsupported statuses
 for model options not implemented by this small boundary.
 
+### BeiDou B1C signal codes
+
+The public signal query uses the canonical two-character RINEX observation
+codes from [RINEX 4.02 Table 15](https://files.igs.org/pub/data/format/rinex_4.02.pdf).
+BDS B1C is `1D` (data), `1P` (pilot), or `1X`
+(data plus pilot), all at 1575.42 MHz.  The corresponding stable byte values
+for `rtklib_code` state/bias queries are exposed as
+`RTKLIB_SHARED_CODE_RINEX_1D`, `_1P`, and `_1X`.  `1D` is an extension value
+handled outside the legacy `MAXCODE=48` table; it is never used as an index
+into a legacy fixed-size array.  BDS B1I remains `2I` at 1561.098 MHz and is
+exposed as `RTKLIB_SHARED_CODE_RINEX_2I`.
+
+The API does not accept a generic three-character `B1C` alias and does not
+reinterpret BDS `1C` as B1C.  GPS, QZSS, GLONASS, and legacy BDS code meanings
+remain unchanged.  BDS `1P` selects CNV1/CNV2, while `1D` selects CNV1 only:
+CNV1's `tgd[0]` is the RINEX `TGD_B1Cp` field and `isc[0]` is
+`ISC_B1Cd`, as specified by the [BeiDou B1C SIS ICD](https://en.beidou.gov.cn/SYSTEMS/ICD/201806/P020180608519640359959.pdf), so the selected raw data-channel bias is
+`c * (tgd[0] + isc[0])`.  CNV2 reuses `isc[0]` for `ISC_B2ad`, and no scalar
+broadcast bias is inferred for CNV2 `1D` or for the combined `1X` observable;
+those **bias queries** return `UNSUPPORTED` while preserving the selected
+identity.  `1X` remains a valid B1C signal for signal/family selection; the
+unsupported result above is only for its scalar bias query.  This mapping
+covers signal metadata and explicitly defined bias terms.  It does not claim
+that modern BDS orbit/variance propagation or full private PVT consumers are
+covered: modern BDS state/variance acceptance remains NOT_RUN.  The
+navigation fixture tests contain no B1C observation epochs, so real B1C
+OBS/PVT also remains NOT_RUN.
+
 The broadcast ionosphere wrapper currently evaluates only the eight-parameter
 Klobuchar families that RTKLIB's `ionmodel()` defines: GPS `LNAV` (and QZSS
 `LNAV` with `IONO_QZS`).  BeiDou `D1D2` uses BDT at the ICD model boundary,
