@@ -56,9 +56,29 @@ static void init_bias(rtklib_shared_bias_result_t *result)
     result->struct_size = (uint32_t)sizeof(*result);
 }
 
-static int close_hz(double actual, double expected)
+static int close_frequency_hz(double actual, double expected)
 {
-    return isfinite(actual) && fabs(actual - expected) <= 0.5;
+    return isfinite(actual) && isfinite(expected) &&
+           fabs(actual - expected) <= 0.5;
+}
+
+static int close_wavelength_m(double actual, double expected)
+{
+    /* A metre-valued wavelength is a separate contract from the Hz-valued
+     * carrier frequency.  Keep this tolerance tight enough to reject zero or
+     * a unit/constant mix-up while allowing normal floating-point rounding. */
+    return isfinite(actual) && actual > 0.0 &&
+           isfinite(expected) && expected > 0.0 &&
+           fabs(actual - expected) <= 1.0e-12;
+}
+
+static int wavelength_negative_cases_are_rejected(double expected)
+{
+    /* Structural negative coverage: these checks must pass only when the
+     * wavelength predicate rejects both zero and an obvious metre error. */
+    return !close_wavelength_m(0.0, expected) &&
+           !close_wavelength_m(expected + 1.0e-3, expected) &&
+           !close_wavelength_m(NAN, expected);
 }
 
 static int has_family(uint32_t mask, uint32_t family)
@@ -123,8 +143,11 @@ int main(int argc, char **argv)
                                      &signal) == RTKLIB_SHARED_OK &&
               signal.rtklib_code == RTKLIB_SHARED_CODE_RINEX_1P &&
               signal.frequency_index == 0 &&
-              close_hz(signal.carrier_frequency_hz, 1575420000.0) &&
-              close_hz(signal.wavelength_m, 299792458.0 / 1575420000.0) &&
+              close_frequency_hz(signal.carrier_frequency_hz, 1575420000.0) &&
+              close_wavelength_m(signal.wavelength_m,
+                                299792458.0 / 1575420000.0) &&
+              wavelength_negative_cases_are_rejected(
+                  299792458.0 / 1575420000.0) &&
               has_family(signal.family_mask, RTKLIB_SHARED_NAV_CNV1) &&
               has_family(signal.family_mask, RTKLIB_SHARED_NAV_CNV2) &&
               !has_family(signal.family_mask, RTKLIB_SHARED_NAV_D1) &&
@@ -136,7 +159,9 @@ int main(int argc, char **argv)
                                      RTKLIB_SHARED_GLO_FCN_UNKNOWN, store,
                                      &signal) == RTKLIB_SHARED_OK &&
               signal.rtklib_code == RTKLIB_SHARED_CODE_RINEX_1D &&
-              close_hz(signal.carrier_frequency_hz, 1575420000.0) &&
+              close_frequency_hz(signal.carrier_frequency_hz, 1575420000.0) &&
+              close_wavelength_m(signal.wavelength_m,
+                                 299792458.0 / 1575420000.0) &&
               signal.family_mask == RTKLIB_SHARED_NAV_CNV1,
           "BDS B1C data mapping is not canonical");
 
@@ -145,7 +170,9 @@ int main(int argc, char **argv)
                                      RTKLIB_SHARED_GLO_FCN_UNKNOWN, store,
                                      &signal) == RTKLIB_SHARED_OK &&
               signal.rtklib_code == RTKLIB_SHARED_CODE_RINEX_1X &&
-              close_hz(signal.carrier_frequency_hz, 1575420000.0) &&
+              close_frequency_hz(signal.carrier_frequency_hz, 1575420000.0) &&
+              close_wavelength_m(signal.wavelength_m,
+                                 299792458.0 / 1575420000.0) &&
               signal.family_mask ==
                   (RTKLIB_SHARED_NAV_CNV1 | RTKLIB_SHARED_NAV_CNV2),
           "BDS B1C combined mapping is not canonical");
@@ -155,7 +182,9 @@ int main(int argc, char **argv)
                                      RTKLIB_SHARED_GLO_FCN_UNKNOWN, store,
                                      &signal) == RTKLIB_SHARED_OK &&
               signal.rtklib_code == RTKLIB_SHARED_CODE_RINEX_2I &&
-              close_hz(signal.carrier_frequency_hz, 1561098000.0) &&
+              close_frequency_hz(signal.carrier_frequency_hz, 1561098000.0) &&
+              close_wavelength_m(signal.wavelength_m,
+                                 299792458.0 / 1561098000.0) &&
               signal.family_mask == (RTKLIB_SHARED_NAV_D1 |
                                      RTKLIB_SHARED_NAV_D2 |
                                      RTKLIB_SHARED_NAV_D1D2),
