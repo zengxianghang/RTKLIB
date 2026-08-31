@@ -20,6 +20,20 @@ static int test_bds_modern_codes(void)
     CHECK(code==CODE_L1P&&freq==1);
     CHECK(getcodepri_ext(SYS_CMP,code,NULL)>0);
 
+    code=obs2code_ext("1D",&freq);
+    CHECK(code==CODE_L1D&&freq==1);
+    obs=code2obs_ext(code,&freq);
+    CHECK(!strcmp(obs,"1D")&&freq==1);
+    CHECK(getcodepri_ext(SYS_CMP,code,NULL)>0);
+    CHECK(getcodepri_ext(SYS_GPS,code,NULL)==0);
+
+    code=obs2code_ext("1X",&freq);
+    CHECK(code==CODE_L1X&&freq==1);
+    obs=code2obs_ext(code,&freq);
+    CHECK(!strcmp(obs,"1X")&&freq==1);
+    CHECK(getcodepri_ext(SYS_CMP,code,NULL)>0);
+    CHECK(getcodepri_ext(SYS_GPS,code,NULL)==0);
+
     code=obs2code_ext("5P",&freq);
     CHECK(code==CODE_L5P&&freq==3);
     obs=code2obs_ext(code,&freq);

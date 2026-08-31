@@ -20,6 +20,9 @@ extern "C" {
 #ifndef CODE_L7D
 #define CODE_L7D 50 /* BDS B2b data: 7D */
 #endif
+#ifndef CODE_L1D
+#define CODE_L1D 51 /* BDS B1C data: 1D */
+#endif
 
 unsigned char obs2code_ext(const char *obs, int *freq);
 const char *code2obs_ext(unsigned char code, int *freq);

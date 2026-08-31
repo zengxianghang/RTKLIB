@@ -4071,7 +4071,9 @@ static int eph_supports_code(int sys, int type, unsigned char code)
         if (code==CODE_L2I||code==CODE_L6I||code==CODE_L7I) {
             return type==NAV_D1D2||type==NAV_D1||type==NAV_D2;
         }
-        if (code==CODE_L1P||code==CODE_L5P) return type==NAV_CNV1||type==NAV_CNV2;
+        if (code==CODE_L1D) return type==NAV_CNV1;
+        if (code==CODE_L1P||code==CODE_L1X||code==CODE_L5P)
+            return type==NAV_CNV1||type==NAV_CNV2;
         if (code==CODE_L7D) return type==NAV_CNV3;
         return 0;
     }
@@ -4287,6 +4289,8 @@ static int signal_code_bias_selected(int sys, int type, unsigned char code,
         }
         else if (type==NAV_CNV1||type==NAV_CNV2) {
             if (code==CODE_L1P) *bias=CLIGHT*eph->tgd[0];
+            else if (code==CODE_L1D&&type==NAV_CNV1)
+                *bias=CLIGHT*(eph->tgd[0]+eph->isc[0]);
             else if (code==CODE_L5P) *bias=CLIGHT*eph->tgd[1];
             else return 0;
         }
