@@ -24,6 +24,23 @@ are bounded and NUL terminated.  The fixed five-byte `family_subtype` input
 fields must contain a NUL within the array; a non-NUL five-byte value is
 rejected instead of truncated.
 
+The RINEX loader accepts a nonempty NUL-terminated path strictly shorter than
+RTKLIB's `MAXSTRPATH` contract.  Wildcard expansion also checks each matching
+`directory + filename` result before copying it into RTKLIB's fixed path
+buffers; a matching result that would exceed the bound is rejected rather
+than silently truncated.  `source_id` may be NULL or empty, in which case the
+validated path supplies the source identity.  A failed load never publishes
+newly decoded records.  If a low-level reserve failure has already invalidated
+preexisting RTKLIB storage, the public catalogue is cleared rather than left
+with dangling record indices.  Any arrays that remain allocated stay owned by
+the store and are released at destruction.
+
+RINEX4 EOP and STO records are currently outside the public record catalogue
+and have no public query kind.  If RTKLIB decodes them while loading a file,
+the store still owns those private arrays; failed-load cleanup removes their
+private decoded counts, and `rtklib_shared_nav_destroy()` releases the arrays
+with the same complete RTKLIB cleanup mask.
+
 Queries distinguish `AVAILABLE`, `UNAVAILABLE`, `UNSUPPORTED` and `FAILED`.
 An explicit caller selected record is retained in the result, including its
 identity and source, when propagation or a signal/model query is unavailable,

@@ -3083,53 +3083,132 @@ extern int execcmd(const char *cmd)
 * return : number of expanded file paths
 * notes  : the order of expanded files is alphabetical order
 *-----------------------------------------------------------------------------*/
+/* Return the length only when a NUL terminator occurs within the destination
+ * path contract.  expath() is used by readrnx() with fixed-size path
+ * buffers, so accepting an unterminated input or a concatenated result that
+ * does not fit would turn a long legal-looking glob into a truncated path. */
+static int bounded_path_length(const char *path, size_t limit, size_t *length)
+{
+    size_t i;
+
+    if (!path || !length || limit == 0) return 0;
+    for (i = 0; i < limit; ++i) {
+        if (path[i] == '\0') {
+            *length = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int bounded_path_pattern(char *pattern, size_t capacity,
+                                const char *text)
+{
+    size_t length;
+
+    /* '^' + text + '$' + NUL must fit. */
+    if (!pattern || capacity < 3 ||
+        !bounded_path_length(text, capacity - 2, &length) ||
+        length + 3 > capacity) return 0;
+    pattern[0] = '^';
+    memcpy(pattern + 1, text, length);
+    pattern[length + 1] = '$';
+    pattern[length + 2] = '\0';
+    return 1;
+}
+
 extern int expath(const char *path, char *paths[], int nmax)
 {
     int i,j,n=0;
-    char tmp[1024];
+    size_t path_len;
+    char tmp[MAXSTRPATH];
+
+    if (!paths || nmax <= 0 || !bounded_path_length(path, MAXSTRPATH,
+                                                     &path_len) ||
+        path_len == 0) return 0;
 #ifdef WIN32
     WIN32_FIND_DATA file;
     HANDLE h;
-    char dir[1024]="",*p;
+    char dir[MAXSTRPATH]="",*p;
+    size_t dir_len = 0, name_len;
     
     rtktrace(3,"expath  : path=%s nmax=%d\n",path,nmax);
     
     if ((p=strrchr(path,'\\'))) {
-        strncpy(dir,path,p-path+1); dir[p-path+1]='\0';
+        dir_len = (size_t)(p - path) + 1;
+        if (dir_len >= MAXSTRPATH) return 0;
+        memcpy(dir,path,dir_len); dir[dir_len]='\0';
     }
     if ((h=FindFirstFile((LPCTSTR)path,&file))==INVALID_HANDLE_VALUE) {
-        strcpy(paths[0],path);
+        if (!paths[0]) return 0;
+        memcpy(paths[0],path,path_len + 1);
         return 1;
     }
-    sprintf(paths[n++],"%s%s",dir,file.cFileName);
+    if (!bounded_path_length(file.cFileName, MAXSTRPATH, &name_len) ||
+        dir_len > MAXSTRPATH - 1 - name_len || !paths[n]) {
+        FindClose(h);
+        return 0;
+    }
+    memcpy(paths[n],dir,dir_len);
+    memcpy(paths[n] + dir_len,file.cFileName,name_len + 1);
+    n++;
     while (FindNextFile(h,&file)&&n<nmax) {
         if (file.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) continue;
-        sprintf(paths[n++],"%s%s",dir,file.cFileName);
+        if (!bounded_path_length(file.cFileName, MAXSTRPATH, &name_len) ||
+            dir_len > MAXSTRPATH - 1 - name_len || !paths[n]) {
+            FindClose(h);
+            return 0;
+        }
+        memcpy(paths[n],dir,dir_len);
+        memcpy(paths[n] + dir_len,file.cFileName,name_len + 1);
+        n++;
     }
     FindClose(h);
 #else
     struct dirent *d;
     DIR *dp;
     const char *file=path;
-    char dir[1024]="",s1[1024],s2[1024],*p,*q,*r;
+    char dir[MAXSTRPATH]="",s1[MAXSTRPATH+3],s2[MAXSTRPATH+3],*p,*q,*r;
+    size_t dir_len = 0, file_len, name_len;
     
     rtktrace(3,"expath  : path=%s nmax=%d\n",path,nmax);
     
     if ((p=strrchr(path,'/'))||(p=strrchr(path,'\\'))) {
-        file=p+1; strncpy(dir,path,p-path+1); dir[p-path+1]='\0';
+        dir_len = (size_t)(p - path) + 1;
+        if (dir_len >= MAXSTRPATH) return 0;
+        file=p+1; memcpy(dir,path,dir_len); dir[dir_len]='\0';
     }
+    if (!bounded_path_length(file, MAXSTRPATH, &file_len)) return 0;
     if (!(dp=opendir(*dir?dir:"."))) return 0;
     while ((d=readdir(dp))) {
         if (*(d->d_name)=='.') continue;
-        sprintf(s1,"^%s$",d->d_name);
-        sprintf(s2,"^%s$",file);
+        if (!bounded_path_pattern(s1,sizeof(s1),d->d_name) ||
+            !bounded_path_pattern(s2,sizeof(s2),file)) {
+            closedir(dp);
+            return 0;
+        }
         for (p=s1;*p;p++) *p=(char)tolower((int)*p);
         for (p=s2;*p;p++) *p=(char)tolower((int)*p);
         
         for (p=s1,q=strtok_r(s2,"*",&r);q;q=strtok_r(NULL,"*",&r)) {
             if ((p=strstr(p,q))) p+=strlen(q); else break;
         }
-        if (p&&n<nmax) sprintf(paths[n++],"%s%s",dir,d->d_name);
+        if (p) {
+            if (!bounded_path_length(d->d_name, MAXSTRPATH, &name_len) ||
+                dir_len > MAXSTRPATH - 1 - name_len) {
+                closedir(dp);
+                return 0;
+            }
+            if (n < nmax) {
+                if (!paths[n]) {
+                    closedir(dp);
+                    return 0;
+                }
+                memcpy(paths[n],dir,dir_len);
+                memcpy(paths[n] + dir_len,d->d_name,name_len + 1);
+                n++;
+            }
+        }
     }
     closedir(dp);
 #endif

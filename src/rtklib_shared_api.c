@@ -16,6 +16,8 @@
 #define SHARED_ERR_SAAS 0.3
 #define SHARED_ERR_BRDCI 0.5
 #define SHARED_REL_HUMI 0.7
+#define SHARED_NAV_FREE_ALL (0x01 | 0x02 | 0x04 | 0x08 | 0x10 | \
+                             0x20 | 0x40 | 0x80 | 0x100 | 0x200)
 
 typedef struct {
     rtklib_shared_record_identity_t identity;
@@ -284,6 +286,78 @@ static int valid_source(const char *source)
     return 0;
 }
 
+/* readrnx(), readrnxt() and uncompress() use MAXSTRPATH-sized buffers.  The
+ * public loader therefore accepts only a nonempty, NUL-terminated path that
+ * fits in that contract, and validates it before dereferencing path[0]. */
+static int valid_rinex_path(const char *path)
+{
+    size_t i;
+
+    if (!path) return 0;
+    for (i = 0; i < MAXSTRPATH; ++i) {
+        if (path[i] == '\0') return i != 0;
+    }
+    return 0;
+}
+
+static void rollback_rinex_load(rtklib_shared_nav_store_t *store,
+                                int old_eph, int old_geph, int old_ion,
+                                int old_ns, int old_neop, int old_nsto,
+                                size_t old_records, size_t old_ion_records,
+                                rtklib_shared_record_id_t old_next_record_id,
+                                uint64_t old_rinex_order)
+{
+    int lost_existing_storage;
+    int cleanup_mask = 0;
+
+    if (!store) return;
+    lost_existing_storage =
+        (old_eph > 0 && !store->nav.eph) ||
+        (old_geph > 0 && !store->nav.geph) ||
+        (old_ion > 0 && !store->nav.ion) ||
+        (old_ns > 0 && !store->nav.seph) ||
+        (old_neop > 0 && !store->nav.eop) ||
+        (old_nsto > 0 && !store->nav.sto);
+    /* No public records can refer to an array whose pre-load count was zero.
+     * Release arrays created by this failed attempt immediately, including
+     * private EOP/STO allocations; preexisting nonempty arrays remain owned by
+     * the store and are released by destroy. */
+    if (old_eph == 0) cleanup_mask |= 0x01;
+    if (old_geph == 0) cleanup_mask |= 0x02;
+    if (old_ion == 0) cleanup_mask |= 0x80;
+    if (old_ns == 0) cleanup_mask |= 0x04;
+    if (old_neop == 0) cleanup_mask |= 0x100;
+    if (old_nsto == 0) cleanup_mask |= 0x200;
+    if (cleanup_mask) freenav(&store->nav, cleanup_mask);
+    if (lost_existing_storage) {
+        /* A failed RTKLIB realloc may already have freed an old array.  Do
+         * not leave catalogue entries pointing into that storage.  The
+         * arrays that remain allocated are still owned by nav_t and are
+         * released by the full destroy mask. */
+        store->nav.n = store->nav.ng = store->nav.nion = 0;
+        store->nav.ns = store->nav.neop = store->nav.nsto = 0;
+        store->nrecords = 0;
+        store->nion_records = 0;
+        /* Keep caller-visible high-water marks so an old record id cannot be
+         * reused after this safety reset (ABA stale-id ambiguity). */
+        store->next_record_id = old_next_record_id;
+        store->next_rinex_order = old_rinex_order;
+        return;
+    }
+    /* An RTKLIB reserve failure can free the affected array and clear its
+     * count.  Never restore a nonzero count against a NULL array. */
+    store->nav.n = store->nav.eph ? old_eph : 0;
+    store->nav.ng = store->nav.geph ? old_geph : 0;
+    store->nav.nion = store->nav.ion ? old_ion : 0;
+    store->nav.ns = store->nav.seph ? old_ns : 0;
+    store->nav.neop = store->nav.eop ? old_neop : 0;
+    store->nav.nsto = store->nav.sto ? old_nsto : 0;
+    store->nrecords = old_records;
+    store->nion_records = old_ion_records;
+    store->next_record_id = old_next_record_id;
+    store->next_rinex_order = old_rinex_order;
+}
+
 static int reserve_records(rtklib_shared_nav_store_t *store, size_t needed)
 {
     shared_record_t *records;
@@ -530,8 +604,10 @@ rtklib_shared_nav_store_t *rtklib_shared_nav_create(void)
 void rtklib_shared_nav_destroy(rtklib_shared_nav_store_t *store)
 {
     if (!store) return;
-    /* freenav owns every dynamic member reachable from nav_t. */
-    freenav(&store->nav, 0xFF);
+    /* freenav owns every dynamic member reachable from nav_t, including the
+     * RINEX4 EOP/STO arrays even though this ABI does not expose those kinds.
+     */
+    freenav(&store->nav, SHARED_NAV_FREE_ALL);
     free(store->records);
     free(store->ion_records);
     free(store);
@@ -611,22 +687,44 @@ int rtklib_shared_nav_load_rinex(rtklib_shared_nav_store_t *store,
                                  const char *path, const char *options,
                                  const char *source_id)
 {
-    int old_eph, old_geph, old_ion;
+    int old_eph, old_geph, old_ion, old_ns, old_neop, old_nsto;
+    size_t old_records, old_ion_records;
+    rtklib_shared_record_id_t old_next_record_id;
+    uint64_t old_rinex_order;
     int stat;
     const char *source;
 
-    if (!store || !path || path[0] == '\0')
+    if (!store || !valid_rinex_path(path))
         return RTKLIB_SHARED_INVALID_ARGUMENT;
     source = source_id && source_id[0] ? source_id : path;
     if (!valid_source(source)) return RTKLIB_SHARED_INVALID_ARGUMENT;
     old_eph = store->nav.n;
     old_geph = store->nav.ng;
     old_ion = store->nav.nion;
+    old_ns = store->nav.ns;
+    old_neop = store->nav.neop;
+    old_nsto = store->nav.nsto;
+    old_records = store->nrecords;
+    old_ion_records = store->nion_records;
+    old_next_record_id = store->next_record_id;
+    old_rinex_order = store->next_rinex_order;
     stat = readrnx(path, 0, options ? options : "", NULL,
                    &store->nav, NULL);
-    if (stat <= 0) return RTKLIB_SHARED_IO_ERROR;
-    if (!append_loaded_metadata(store, old_eph, old_geph, old_ion, source))
+    if (stat <= 0) {
+        /* readrnx may have allocated records before a later file/parse
+         * failure.  Do not publish those records; any arrays remain owned by
+         * nav_t and are released by freenav() at destruction. */
+        rollback_rinex_load(store, old_eph, old_geph, old_ion, old_ns,
+                            old_neop, old_nsto, old_records, old_ion_records,
+                            old_next_record_id, old_rinex_order);
+        return RTKLIB_SHARED_IO_ERROR;
+    }
+    if (!append_loaded_metadata(store, old_eph, old_geph, old_ion, source)) {
+        rollback_rinex_load(store, old_eph, old_geph, old_ion, old_ns,
+                            old_neop, old_nsto, old_records, old_ion_records,
+                            old_next_record_id, old_rinex_order);
         return RTKLIB_SHARED_ALLOCATION_ERROR;
+    }
     return RTKLIB_SHARED_OK;
 }
 
@@ -1134,11 +1232,15 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
     result->clock_drift_sps = (next_dts[0] - dts[0]) / 1E-3;
     result->variance_m2 = variance;
     result->state_valid = 1;
-    result->health = rtklib_signal_health_ext(system,
-                                               (int)record->identity.family,
-                                               code, result->health_raw) == 0 ?
-                     RTKLIB_SHARED_HEALTH_HEALTHY :
-                     RTKLIB_SHARED_HEALTH_UNHEALTHY;
+    if (result->health_raw < 0) {
+        result->health = RTKLIB_SHARED_HEALTH_UNKNOWN;
+    } else {
+        int signal_health = rtklib_signal_health_ext(
+            system, (int)record->identity.family, code, result->health_raw);
+        result->health = signal_health < 0 ? RTKLIB_SHARED_HEALTH_UNKNOWN :
+            signal_health == 0 ? RTKLIB_SHARED_HEALTH_HEALTHY :
+            RTKLIB_SHARED_HEALTH_UNHEALTHY;
+    }
     return stat;
 }
 

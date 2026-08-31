@@ -82,6 +82,25 @@ static int bytes_are(const void *data, size_t size, unsigned char value)
     return 1;
 }
 
+static const char *short_fixture_path(const char *fallback)
+{
+    static const char *candidates[] = {
+        "fixtures/brd400_selected.rnx",
+        "tests/rtklib_shared_api/fixtures/brd400_selected.rnx"
+    };
+    size_t i;
+    FILE *file;
+
+    for (i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        file = fopen(candidates[i], "rb");
+        if (file) {
+            fclose(file);
+            return candidates[i];
+        }
+    }
+    return fallback;
+}
+
 /* This deliberately contains only the two ABI header words plus a canary.
  * Passing it as a result object must be safe when struct_size is short: the
  * implementation must validate before it writes any result byte. */
@@ -696,6 +715,7 @@ int main(int argc, char **argv)
     const geph_t *e_glo_healthy, *e_glo_unhealthy, *e_glo_zero;
     const ion_t *i_gps, *i_bds_d1d2, *i_bds_bdgim;
     rtklib_shared_eph_input_t eph_input, bad_eph;
+    rtklib_shared_eph_input_t unknown_health_input;
     rtklib_shared_glo_eph_input_t glo_input;
     rtklib_shared_ion_input_t ion_input, bad_ion;
     rtklib_shared_state_query_t query;
@@ -729,6 +749,48 @@ int main(int argc, char **argv)
     CHECK(store != NULL, "shared NAV store allocation failed");
     CHECK(rtklib_shared_nav_load_rinex(store, path, "", FIXTURE_SOURCE_ID) ==
           RTKLIB_SHARED_OK, "shared NAV RINEX load failed");
+
+    /* The loader must validate the path before any fixed-buffer consumer is
+     * called, while a NULL/empty source id remains a supported fallback for
+     * ordinary short fixture paths. */
+    {
+        rtklib_shared_nav_store_t *source_store;
+        const char *source_path = strlen(path) <
+            RTKLIB_SHARED_SOURCE_ID_MAX ? path : short_fixture_path(path);
+        char too_long_path[MAXSTRPATH + 1];
+
+        CHECK(strlen(source_path) < RTKLIB_SHARED_SOURCE_ID_MAX,
+              "source fallback test has no bounded fixture path");
+        source_store = rtklib_shared_nav_create();
+        CHECK(source_store != NULL, "source fallback store allocation failed");
+        CHECK(rtklib_shared_nav_load_rinex(source_store, source_path, "",
+                                           NULL) == RTKLIB_SHARED_OK,
+              "NULL source id was not replaced by the validated path");
+        CHECK(rtklib_shared_nav_record_count(source_store,
+                                             RTKLIB_SHARED_RECORD_EPH,
+                                             RTKLIB_SHARED_SYS_GPS) == 3,
+              "NULL source id load lost GPS records");
+        rtklib_shared_nav_destroy(source_store);
+
+        source_store = rtklib_shared_nav_create();
+        CHECK(source_store != NULL, "short source store allocation failed");
+        CHECK(rtklib_shared_nav_load_rinex(source_store, source_path, "",
+                                           "x") == RTKLIB_SHARED_OK,
+              "short source id was rejected");
+        rtklib_shared_nav_destroy(source_store);
+
+        memset(too_long_path, 'x', sizeof(too_long_path));
+        too_long_path[MAXSTRPATH] = '\0';
+        CHECK(rtklib_shared_nav_load_rinex(store, NULL, "", "x") ==
+                  RTKLIB_SHARED_INVALID_ARGUMENT,
+              "NULL RINEX path was dereferenced");
+        CHECK(rtklib_shared_nav_load_rinex(store, "", "", "x") ==
+                  RTKLIB_SHARED_INVALID_ARGUMENT,
+              "empty RINEX path was accepted");
+        CHECK(rtklib_shared_nav_load_rinex(store, too_long_path, "", "x") ==
+                  RTKLIB_SHARED_INVALID_ARGUMENT,
+              "overlong RINEX path reached readrnx");
+    }
     CHECK(rtklib_shared_nav_record_count(store, RTKLIB_SHARED_RECORD_EPH,
                                          RTKLIB_SHARED_SYS_GPS) == 3 &&
           rtklib_shared_nav_record_count(store, RTKLIB_SHARED_RECORD_GLO_EPH,
@@ -1054,6 +1116,28 @@ int main(int argc, char **argv)
     CHECK(check_state(store, &loaded, CODE_L1P, e_bds_cnv1, NULL) == 0 &&
           check_bias(store, &loaded, CODE_L1P, SYS_CMP, e_bds_cnv1, NULL) == 0,
           "injected BDS selected state/bias failed");
+
+    /* A decoded negative health value is the explicit public UNKNOWN
+     * sentinel.  It must not be passed through family bit tests that turn
+     * -1 into UNHEALTHY, while state and selected identity remain usable. */
+    fill_eph_input(e_g_lnav, &unknown_health_input);
+    unknown_health_input.health_raw = -1;
+    unknown_health_input.receive_order = 1005;
+    strcpy(unknown_health_input.source_id, "receiver:unknown-health");
+    CHECK(rtklib_shared_nav_insert_eph(store, &unknown_health_input,
+                                       &inserted_id) == RTKLIB_SHARED_OK &&
+          inserted_id != 0, "unknown-health EPH insertion failed");
+    init_state_query(&query, unknown_health_input.system,
+                     unknown_health_input.prn, unknown_health_input.family,
+                     CODE_L1C, unknown_health_input.toe, inserted_id);
+    init_state_result(&state_result);
+    CHECK(rtklib_shared_state_query(store, &query, &state_result) ==
+              RTKLIB_SHARED_OK && state_result.state_valid == 1 &&
+          state_result.health_raw == -1 &&
+          state_result.health == RTKLIB_SHARED_HEALTH_UNKNOWN &&
+          state_result.identity.record_id == inserted_id &&
+          state_result.identity.health_raw == -1,
+          "negative health sentinel was not preserved as UNKNOWN");
 
     fill_glo_input(e_glo_zero, &glo_input);
     before_count = rtklib_shared_nav_record_count(store,

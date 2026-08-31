@@ -335,7 +335,15 @@ typedef struct {
     uint8_t reserved[32];
 } rtklib_shared_ion_result_t;
 
-/* The query can use selected_record_id=0 to apply the caller's declared
+/* The RINEX loader requires a nonempty NUL-terminated path shorter than
+ * MAXSTRPATH.  Wildcard expansion rejects any matching directory/name result
+ * that would not fit the same bound; it never truncates a path.  source_id
+ * may be NULL or empty, in which case the validated path is used as the
+ * source identity.  A failed load never publishes newly decoded catalogue
+ * records; if a low-level reserve failure has already invalidated preexisting
+ * storage, the public catalogue is cleared rather than left dangling.
+ *
+ * The query can use selected_record_id=0 to apply the caller's declared
  * default policy. A nonzero stale id is an error and never triggers fallback. */
 int rtklib_shared_abi_version(void);
 rtklib_shared_nav_store_t *rtklib_shared_nav_create(void);
