@@ -40,7 +40,7 @@ $(BUILD)/%.o: $(SRC)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SHARED): $(PIC_OBJECTS)
-	$(CC) $(SHARED_LDFLAGS) -o $@ $^ -lm -lpthread
+	$(CC) $(SHARED_LDFLAGS) $(LDFLAGS) -o $@ $^ -lm -lpthread
 
 $(PIC_BUILD)/%.o: $(SRC)/%.c
 	@mkdir -p $(dir $@)

@@ -112,23 +112,84 @@ The normalized orbit and clock fields map explicitly as follows:
 | `additional_mean_motion_rate_rad_s2` | `ndot` | radians/second², CNAV mean-motion rate |
 | `delta_n0_raw`, `top_raw`, `delta_n0_dot_raw`, `urai_*_raw`, `wn_op_raw`, `sisai_raw`, `int_flag_raw` | same named modern fields | decoder-native raw fields; no source-defined week or index is relabelled as a physical unit |
 
-The legacy metric-SVA rule below does not apply to GPS/QZSS modern `CNAV` or
-`CNV2`.  Their `urai_ned` and `urai_ed` values remain raw decoder-native
-components.  The RINEX 4 modern decoder clears the private legacy `eph_t.sva` slot to
-RTKLIB's negative unknown sentinel for these families so an URAI component
-cannot be consumed as a metric or as a URA table index.  No URAI-to-metre
-conversion or composite accuracy evaluator is defined in Phase A.  GPS/QZSS
-modern P1 handling, Galileo modern SISA, BDS CNV1/CNV2/CNV3 SISAI, GLONASS,
-and SBAS accuracy semantics are outside this contract.
+The following SVA contract is deliberately limited to legacy EPH records
+whose decoded RINEX SV accuracy field is explicitly metric SVA and is carried
+in `eph_t.sva`.  This regression covers GPS LNAV (and the corresponding
+legacy QZSS LNAV family where the same field contract applies); it makes no
+claim for a family whose source field has a different accuracy definition.
+It does not define the separate `geph_t` (GLONASS) or `seph_t` (SBAS) accuracy
+fields.  It also does not define GPS/QZSS modern URAI/SISA interpretations,
+including CNAV/CNV2 URAI/P1, or Galileo modern SISA; modern P1 handling is a
+follow-up contract.
 
-The current shared build is fixed at RTKLIB's `URA2URAI=0` configuration
-(`src/rtklib.h:54`).  Accordingly, the legacy metric `eph_t.sva` and public
-`sva_m` input are accuracy values in metres, and state `variance_m2` uses the
-square of that value.  `URA2URAI=1` remains a compile-time alternative in the
-private RTKLIB code, but it is not a supported or tested configuration of this
-shared contract; this document makes no validation claim for it.  The
-`ephemeris.c` URA lookup table and its unknown-index fallback therefore remain
-outside the Phase A public modern-family contract.
+For the in-scope legacy path, this library is built with RTKLIB's
+`URA2URAI=0` configuration.  Accordingly, `eph_t.sva` and the public `sva_m`
+input are accuracy values in metres, and state `variance_m2` uses the square
+of that value.  The authoritative `ephemeris.c` path uses the URA lookup table
+only for builds where `URA2URAI=1`; the out-of-range URA index sentinel is
+never used as a table index.  The bucket representation and the metric
+representation are therefore different contracts, not interchangeable units.
+The public metric `sva_m` is a `double` and must not be passed through the old
+`ctypes.c_int` or other flat legacy ABI adapter.  Such an adapter turns `2.0`
+into URA index `2`, selects the `4.85 m` bucket, and publishes
+`23.5225 m^2`, rather than the metric `4.0 m^2` result.  That old integer
+adapter is disabled at this public boundary.
+
+The semantic difference described here is proposed; maintainer confirmation
+for Issue #17 is still pending.  It must not be labelled
+`APPROVED_SEMANTIC_DIFFERENCE` before that decision is recorded.
+
+For example, the RINEX 2 GPS G01 record in
+`test/data/rinex/brdc1820.10n` contains an SV accuracy value of `2.0 m`.
+Under this shared contract it remains `eph_t.sva == 2.0` and produces
+`variance_m2 == 4.0 m^2`.  The old Analyzer vendored path first mapped the
+same metric value through `uraindex()` to index 0, then used the conservative
+URA bucket bound `2.4 m`, producing `5.76 m^2`; that legacy result is not the
+shared physical-value contract.  The distinction is a representation change
+inside the implementation boundary, so ABI version 1.0 is unchanged.
+
+Normalized input on these in-scope EPH families accepts a finite negative
+`sva_m` as RTKLIB's unknown or out-of-range sentinel; propagation maps it to
+the existing `6144^2 m^2` unknown variance.  Non-finite normalized input,
+including NaN, `+Inf` and `-Inf`, is rejected at the input validation boundary
+and does not publish a record or produce a state result.  A finite zero is a
+supported accuracy value and produces zero variance.  These rules do not
+change the separate GLONASS/SBAS family semantics or the excluded modern
+URAI/SISA/P1 fields.
+
+The focused private and public tests are unit/adapter checks for this local
+contract; a passing unit test is not a T03 cross-backend parity result.  T03
+remains FAIL while the old Analyzer vendored path reports `5.76 m^2` for the
+fixture and the shared path reports `4.0 m^2`; the current Analyzer does not
+consume `variance_m2`.  This contract clarification changes neither runtime
+navigation behavior nor the public ABI layout, so ABI version 1.0 is
+unchanged.
+
+The legacy metric-SVA rule above does not apply to GPS/QZSS modern `CNAV` or
+`CNV2`.  Their `urai_ned` and `urai_ed` values remain raw decoder-native
+components.  The RINEX 4 modern decoder clears the private legacy `eph_t.sva`
+slot to RTKLIB's negative unknown sentinel for these families so an URAI
+component cannot be consumed as a metric or as a URA table index.  No
+URAI-to-metre conversion or composite accuracy evaluator is defined in Phase
+A.  GPS/QZSS modern P1 handling, Galileo modern SISA, BDS CNV1/CNV2/CNV3
+SISAI, GLONASS, and SBAS accuracy semantics are outside this contract.
+
+This Phase A containment applies only to the public
+`rtklib_shared_state_query()` result.  It does not change or claim to contain
+the private `rtklib_signal_state_ext()` path or the private residual/Doppler
+wrappers.  Those paths still expose the legacy `eph2pos()` variance output;
+after the modern parser's negative sentinel this is RTKLIB's existing unknown
+fallback `6144^2 m^2`.  The current residual and Doppler implementations do
+not consume that returned variance (`src/rtklib_residual_ext.c:12-23` and
+`:135-193`); this contract makes no claim of whole-RTKLIB variance
+containment.  The private `satposs()` path can still receive that `6144^2 m^2`
+fallback and may pass it into the full RTKLIB weighting paths used by
+`pntpos()`, PPP and RTK.  The shared archive target in
+`lib/rtklib_shared/gcc/makefile` does not include `pntpos.c`, and this Phase A
+boundary provides no control for those private consumers.  Phase A therefore
+does not solve the complete RTKLIB/PVT weighting risk; an application using
+those consumers must not treat this public state API containment as proof that
+the complete private path is safe.
 
 The raw code-bias result follows the existing RTKLIB extension convention:
 
