@@ -1122,22 +1122,58 @@ static void set_state_health(rtklib_shared_state_result_t *result,
 
 static const shared_record_t *select_default_record(
     const rtklib_shared_nav_store_t *store,
-    const rtklib_shared_state_query_t *query, int satellite)
+    const rtklib_shared_state_query_t *query, int satellite,
+    int *selection_error)
 {
     int stat, eph_index = -1, geph_index = -1, type = 0;
     int system, prn = 0, required_mask;
     const shared_record_t *record;
+    unsigned char *allow_eph = NULL, *allow_geph = NULL;
+    uint32_t source_kind = query->reserved[0];
     size_t i;
 
+    if (selection_error) *selection_error = RTKLIB_SHARED_OK;
     system = satsys(satellite, &prn);
     required_mask = query->family_mask ? (int)query->family_mask :
         rtklib_signal_family_mask_ext(system, query->rtklib_code);
     if (required_mask == 0) return NULL;
-    stat = rtklib_signal_select_record_ext(
-        to_gtime(query->selection_time), satellite, query->rtklib_code,
-        required_mask,
-        system == SYS_GLO ? query->glonass_fcn : INT_MIN, &store->nav,
-        &eph_index, &geph_index, &type);
+    if (source_kind != 0) {
+        int count = system == SYS_GLO ? store->nav.ng : store->nav.n;
+        unsigned char *allow;
+        if (count <= 0) return NULL;
+        allow = (unsigned char *)calloc((size_t)count, sizeof(*allow));
+        if (!allow) {
+            if (selection_error) *selection_error =
+                RTKLIB_SHARED_ALLOCATION_ERROR;
+            return NULL;
+        }
+        if (system == SYS_GLO) allow_geph = allow;
+        else allow_eph = allow;
+        for (i = 0; i < store->nrecords; ++i) {
+            record = &store->records[i];
+            if (record->identity.source_kind != source_kind) continue;
+            if (system == SYS_GLO && record->kind ==
+                RTKLIB_SHARED_RECORD_GLO_EPH &&
+                record->index >= 0 && record->index < count)
+                allow_geph[record->index] = 1;
+            else if (system != SYS_GLO && record->kind ==
+                     RTKLIB_SHARED_RECORD_EPH &&
+                     record->index >= 0 && record->index < count)
+                allow_eph[record->index] = 1;
+        }
+        stat = rtklib_signal_select_record_filtered_ext(
+            to_gtime(query->selection_time), satellite, query->rtklib_code,
+            required_mask,
+            system == SYS_GLO ? query->glonass_fcn : INT_MIN, &store->nav,
+            allow_eph, allow_geph, &eph_index, &geph_index, &type);
+        free(allow);
+    } else {
+        stat = rtklib_signal_select_record_ext(
+            to_gtime(query->selection_time), satellite, query->rtklib_code,
+            required_mask,
+            system == SYS_GLO ? query->glonass_fcn : INT_MIN, &store->nav,
+            &eph_index, &geph_index, &type);
+    }
     if (stat <= 0) return NULL;
     (void)prn;
     for (i = 0; i < store->nrecords; ++i) {
@@ -1146,7 +1182,9 @@ static const shared_record_t *select_default_record(
              RTKLIB_SHARED_RECORD_GLO_EPH && record->index == geph_index) ||
             (system != SYS_GLO && record->kind ==
              RTKLIB_SHARED_RECORD_EPH && record->index == eph_index)) {
-            if (record->identity.family == (uint32_t)type) return record;
+            if (record->identity.family == (uint32_t)type &&
+                (source_kind == 0 ||
+                 record->identity.source_kind == source_kind)) return record;
         }
     }
     return NULL;
@@ -1162,6 +1200,9 @@ static int request_is_valid(const rtklib_shared_state_query_t *query,
         !valid_satellite(query->system, query->prn, satellite)) return 0;
     if (query->family_mask != 0 && !valid_family_mask(query->family_mask))
         return 0;
+    if (query->reserved[0] != 0 &&
+        query->reserved[0] != RTKLIB_SHARED_SOURCE_RINEX &&
+        query->reserved[0] != RTKLIB_SHARED_SOURCE_RECEIVER) return 0;
     if (query->glonass_fcn != RTKLIB_SHARED_GLO_FCN_UNKNOWN &&
         (query->glonass_fcn < -7 || query->glonass_fcn > 13)) return 0;
     return 1;
@@ -1211,9 +1252,11 @@ static const shared_record_t *record_for_query(
         }
         return record;
     }
-    record = select_default_record(store, query, satellite);
-    if (!record && selection_error)
-        *selection_error = RTKLIB_SHARED_UNAVAILABLE;
+    record = select_default_record(store, query, satellite, selection_error);
+    if (!record && selection_error) {
+        if (*selection_error == RTKLIB_SHARED_OK)
+            *selection_error = RTKLIB_SHARED_UNAVAILABLE;
+    }
     return record;
 }
 
@@ -1278,7 +1321,7 @@ int rtklib_shared_state_query(const rtklib_shared_nav_store_t *store,
                               rtklib_shared_state_result_t *result)
 {
     const shared_record_t *record;
-    int satellite, explicit_id, stat;
+    int satellite, explicit_id, stat, selection_error = RTKLIB_SHARED_OK;
 
     if (!result || !valid_header(result->abi_version, result->struct_size,
                                  sizeof(*result)))
@@ -1296,10 +1339,13 @@ int rtklib_shared_state_query(const rtklib_shared_nav_store_t *store,
             return RTKLIB_SHARED_UNSUPPORTED;
         }
     } else {
-        record = select_default_record(store, query, satellite);
+        record = select_default_record(store, query, satellite,
+                                       &selection_error);
         if (!record) {
-            result->status = RTKLIB_SHARED_QUERY_UNAVAILABLE;
-            return RTKLIB_SHARED_UNAVAILABLE;
+            result->status = selection_error == RTKLIB_SHARED_ALLOCATION_ERROR ?
+                RTKLIB_SHARED_QUERY_FAILED : RTKLIB_SHARED_QUERY_UNAVAILABLE;
+            return selection_error == RTKLIB_SHARED_ALLOCATION_ERROR ?
+                RTKLIB_SHARED_ALLOCATION_ERROR : RTKLIB_SHARED_UNAVAILABLE;
         }
         result->identity = record->identity;
     }
@@ -1335,6 +1381,10 @@ int rtklib_shared_bias_query(const rtklib_shared_nav_store_t *store,
     if (!record) {
         if (selection_error == RTKLIB_SHARED_INVALID_ARGUMENT)
             return RTKLIB_SHARED_INVALID_ARGUMENT;
+        if (selection_error == RTKLIB_SHARED_ALLOCATION_ERROR) {
+            result->status = RTKLIB_SHARED_QUERY_FAILED;
+            return RTKLIB_SHARED_ALLOCATION_ERROR;
+        }
         result->status = RTKLIB_SHARED_QUERY_UNAVAILABLE;
         return RTKLIB_SHARED_UNAVAILABLE;
     }

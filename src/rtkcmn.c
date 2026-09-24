@@ -4081,7 +4081,9 @@ static int eph_supports_code(int sys, int type, unsigned char code)
 }
 
 static const eph_t *select_generic_eph(gtime_t time, int sat,
-                                       const nav_t *nav, int *message_type)
+                                       const nav_t *nav,
+                                       const unsigned char *allow_eph,
+                                       int *message_type)
 {
     double age,tmax,tmin;
     int i,j=-1,sys;
@@ -4093,6 +4095,7 @@ static const eph_t *select_generic_eph(gtime_t time, int sat,
     tmax=max_eph_age_sec(sys)+1.0;
     tmin=tmax+1.0;
     for (i=0;i<nav->n;i++) {
+        if (allow_eph && !allow_eph[i]) continue;
         if (nav->eph[i].sat!=sat) continue;
         if ((age=fabs(timediff(nav->eph[i].toe,time)))>tmax) continue;
         if (age<=tmin) {
@@ -4107,7 +4110,9 @@ static const eph_t *select_generic_eph(gtime_t time, int sat,
 
 static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
                                       int required_message_mask,
-                                      const nav_t *nav, int *message_type)
+                                      const nav_t *nav,
+                                      const unsigned char *allow_eph,
+                                      int *message_type)
 {
     const eph_t *best=NULL;
     double best_age=0.0,max_age;
@@ -4118,6 +4123,7 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
 
     for (i=0;i<nav->n;i++) {
         double age;
+        if (allow_eph && !allow_eph[i]) continue;
         if (nav->eph[i].sat!=sat) continue;
         type=canonical_message_type(nav->eph+i,sys);
         if (required_message_mask&&!(type&required_message_mask)) continue;
@@ -4138,6 +4144,7 @@ static const geph_t *select_signal_geph(gtime_t time, int sat,
                                         unsigned char code,
                                         int required_message_mask,
                                         const nav_t *nav, int required_fcn,
+                                        const unsigned char *allow_geph,
                                         int *message_type)
 {
     const geph_t *best=NULL;
@@ -4146,6 +4153,7 @@ static const geph_t *select_signal_geph(gtime_t time, int sat,
     if (!nav) return NULL;
     for (i=0;i<nav->ng;i++) {
         double age;
+        if (allow_geph && !allow_geph[i]) continue;
         if (nav->geph[i].sat!=sat) continue;
         type=nav->geph[i].hdr.msg_type?nav->geph[i].hdr.msg_type:NAV_FDMA;
         if (required_fcn != INT_MIN && nav->geph[i].frq != required_fcn)
@@ -4190,10 +4198,11 @@ int rtklib_signal_family_mask_ext(int system, unsigned char code)
     return mask;
 }
 
-int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
-                                    int required_message_mask, int required_fcn,
-                                    const nav_t *nav, int *eph_index,
-                                    int *geph_index, int *message_type)
+int rtklib_signal_select_record_filtered_ext(
+    gtime_t time, int sat, unsigned char code, int required_message_mask,
+    int required_fcn, const nav_t *nav, const unsigned char *allow_eph,
+    const unsigned char *allow_geph, int *eph_index, int *geph_index,
+    int *message_type)
 {
     const eph_t *eph=NULL;
     const geph_t *geph=NULL;
@@ -4208,7 +4217,7 @@ int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
     if (sys==SYS_NONE) return -1;
     if (sys==SYS_GLO) {
         geph=select_signal_geph(time,sat,code,required_message_mask,nav,
-                                required_fcn,&type);
+                                required_fcn,allow_geph,&type);
         if (!geph) return 0;
         for (i=0;i<nav->ng;i++) if (nav->geph+i==geph) {
             *geph_index=i;
@@ -4217,8 +4226,9 @@ int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
         }
     } else {
         eph=required_message_mask ?
-            select_signal_eph(time,sat,code,required_message_mask,nav,&type) :
-            select_generic_eph(time,sat,nav,&type);
+            select_signal_eph(time,sat,code,required_message_mask,nav,
+                              allow_eph,&type) :
+            select_generic_eph(time,sat,nav,allow_eph,&type);
         if (!eph) return 0;
         for (i=0;i<nav->n;i++) if (nav->eph+i==eph) {
             *eph_index=i;
@@ -4227,6 +4237,16 @@ int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
         }
     }
     return -1;
+}
+
+int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
+                                    int required_message_mask, int required_fcn,
+                                    const nav_t *nav, int *eph_index,
+                                    int *geph_index, int *message_type)
+{
+    return rtklib_signal_select_record_filtered_ext(
+        time,sat,code,required_message_mask,required_fcn,nav,NULL,NULL,
+        eph_index,geph_index,message_type);
 }
 
 static double freq_ratio_squared(double reference_hz, double signal_hz)
@@ -4344,13 +4364,14 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
 
     if (sys==SYS_GLO) {
         geph=select_signal_geph(time,sat,code,required_message_mask,nav,
-                                INT_MIN,&type);
+                                INT_MIN,NULL,&type);
         if (!geph) return 0;
         stat=rtklib_signal_code_bias_selected_ext(sys,type,code,NULL,geph,
                                                   &bias,info);
         if (stat<=0) return stat;
     } else {
-        eph=select_signal_eph(time,sat,code,required_message_mask,nav,&type);
+        eph=select_signal_eph(time,sat,code,required_message_mask,nav,
+                              NULL,&type);
         if (!eph) return 0;
         stat=rtklib_signal_code_bias_selected_ext(sys,type,code,eph,NULL,
                                                   &bias,info);
@@ -4382,7 +4403,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
 
     if (sys==SYS_GLO) {
         geph=select_signal_geph(time,sat,code,required_message_mask,nav,
-                                INT_MIN,&type);
+                                INT_MIN,NULL,&type);
         if (!geph) return 0;
         *geph_out=*geph;
         if (info) {
@@ -4394,7 +4415,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
     }
 
     if (!required_message_mask) {
-        eph=select_generic_eph(time,sat,nav,&type);
+        eph=select_generic_eph(time,sat,nav,NULL,&type);
     }
     else {
         max_age=max_eph_age_sec(sys);

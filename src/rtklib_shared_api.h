@@ -283,6 +283,11 @@ typedef struct {
     rtklib_shared_time_t evaluation_time;
     rtklib_shared_time_t selection_time;
     rtklib_shared_record_id_t selected_record_id;
+    /* Default selection only (selected_record_id == 0): reserved[0] is a
+     * source-kind filter.  0 keeps the ABI 1.0 unrestricted selector;
+     * RTKLIB_SHARED_SOURCE_RINEX / _RECEIVER restrict candidates before
+     * the existing family, age and tie-break rules.  Explicit IDs ignore
+     * this filter.  reserved[1..31] remain zero for forward compatibility. */
     uint8_t reserved[32];
 } rtklib_shared_state_query_t;
 
