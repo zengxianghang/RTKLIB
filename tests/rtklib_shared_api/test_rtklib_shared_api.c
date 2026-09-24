@@ -721,6 +721,105 @@ static int run_delft_week_boundary(const char *path)
     return 0;
 }
 
+static int check_source_kind_default_selection(const char *path,
+                                               const eph_t *gps_lnav,
+                                               const geph_t *glo_fdma)
+{
+    rtklib_shared_nav_store_t *mixed = rtklib_shared_nav_create();
+    rtklib_shared_eph_input_t gps_input;
+    rtklib_shared_glo_eph_input_t glo_input;
+    rtklib_shared_record_id_t receiver_gps = 0, receiver_glo = 0;
+    rtklib_shared_state_query_t query;
+    rtklib_shared_state_result_t state;
+    rtklib_shared_bias_result_t bias;
+
+    CHECK(mixed != NULL, "mixed-source store allocation failed");
+    /* Insert exact normalized copies of verbatim RINEX records first.  Equal
+     * Toe/Toc selects this first entry without the filter; no NAV value is
+     * fabricated to construct the mixed-source regression. */
+    fill_eph_input(gps_lnav, &gps_input);
+    fill_glo_input(glo_fdma, &glo_input);
+    CHECK(rtklib_shared_nav_insert_eph(mixed, &gps_input, &receiver_gps) ==
+              RTKLIB_SHARED_OK && receiver_gps != 0 &&
+          rtklib_shared_nav_insert_glo_eph(mixed, &glo_input, &receiver_glo) ==
+              RTKLIB_SHARED_OK && receiver_glo != 0,
+          "verbatim receiver records could not be inserted");
+
+    init_state_query(&query, RTKLIB_SHARED_SYS_GPS, gps_input.prn,
+                     RTKLIB_SHARED_NAV_LNAV, CODE_L1C, gps_input.toe, 0);
+    query.reserved[0] = RTKLIB_SHARED_SOURCE_RINEX;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_UNAVAILABLE &&
+          state.status == RTKLIB_SHARED_QUERY_UNAVAILABLE &&
+          state.identity.record_id == 0,
+          "RINEX-only selection silently selected a receiver record");
+
+    CHECK(rtklib_shared_nav_load_rinex(mixed, path, "", FIXTURE_SOURCE_ID) ==
+              RTKLIB_SHARED_OK,
+          "real RINEX records could not be added to the mixed store");
+    query.reserved[0] = 0;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_OK &&
+          state.identity.record_id == receiver_gps &&
+          state.identity.source_kind == RTKLIB_SHARED_SOURCE_RECEIVER,
+          "unrestricted default selection changed its existing tie rule");
+    query.reserved[0] = RTKLIB_SHARED_SOURCE_RINEX;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_OK &&
+          state.identity.record_id != receiver_gps &&
+          state.identity.source_kind == RTKLIB_SHARED_SOURCE_RINEX &&
+          !strcmp(state.identity.source_id, FIXTURE_SOURCE_ID),
+          "source-constrained RINEX state did not select RINEX identity");
+    init_bias_result(&bias);
+    CHECK(rtklib_shared_bias_query(mixed, &query, &bias) ==
+              RTKLIB_SHARED_OK &&
+          bias.identity.record_id == state.identity.record_id &&
+          bias.identity.source_kind == RTKLIB_SHARED_SOURCE_RINEX,
+          "source-constrained bias selected a different NAV record");
+    query.reserved[0] = RTKLIB_SHARED_SOURCE_RECEIVER;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_OK && state.identity.record_id == receiver_gps,
+          "receiver-only selection lost the receiver record");
+    query.selected_record_id = receiver_gps;
+    query.reserved[0] = RTKLIB_SHARED_SOURCE_RINEX;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_OK && state.identity.record_id == receiver_gps,
+          "source filter changed explicit-ID selection");
+    query.selected_record_id = UINT64_MAX;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT && state.identity.record_id == 0,
+          "stale explicit ID fell back to another source");
+    query.selected_record_id = 0;
+    query.reserved[0] = 99;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "invalid source-kind filter was accepted");
+
+    init_state_query(&query, RTKLIB_SHARED_SYS_GLO, glo_input.prn,
+                     RTKLIB_SHARED_NAV_FDMA, CODE_L1C, glo_input.toe, 0);
+    query.glonass_fcn = glo_input.glonass_fcn;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_OK && state.identity.record_id == receiver_glo,
+          "unrestricted GLONASS default selection changed");
+    query.reserved[0] = RTKLIB_SHARED_SOURCE_RINEX;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_query(mixed, &query, &state) ==
+              RTKLIB_SHARED_OK &&
+          state.identity.source_kind == RTKLIB_SHARED_SOURCE_RINEX &&
+          state.identity.glonass_fcn == glo_input.glonass_fcn,
+          "RINEX-only GLONASS selection lost source or FCN");
+    rtklib_shared_nav_destroy(mixed);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] :
@@ -988,6 +1087,8 @@ int main(int argc, char **argv)
           e_glo_healthy && e_glo_unhealthy && e_glo_zero && i_gps &&
           i_bds_d1d2 && i_bds_bdgim,
           "private oracle could not locate selected real records");
+    CHECK(check_source_kind_default_selection(path, e_g_lnav, e_glo_zero) == 0,
+          "mixed-source default selection regression failed");
 
     CHECK(find_identity_time(identities, count, RTKLIB_SHARED_RECORD_EPH,
                              RTKLIB_SHARED_SYS_BDS, 19,

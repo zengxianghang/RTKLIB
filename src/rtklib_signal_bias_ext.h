@@ -63,6 +63,16 @@ int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
                                     const nav_t *nav, int *eph_index,
                                     int *geph_index, int *message_type);
 
+/* Internal selector variant used by the opaque shared store.  A non-NULL
+ * allow array has one byte per nav->eph/nav->geph entry; zero excludes the
+ * entry before the existing family, age and tie-break rules run.  NULL means
+ * unrestricted selection, exactly as rtklib_signal_select_record_ext(). */
+int rtklib_signal_select_record_filtered_ext(
+    gtime_t time, int sat, unsigned char code, int required_message_mask,
+    int required_fcn, const nav_t *nav, const unsigned char *allow_eph,
+    const unsigned char *allow_geph, int *eph_index, int *geph_index,
+    int *message_type);
+
 /*
  * Select and copy the epoch/message-family broadcast ephemeris used by the
  * signal-specific bias and state paths. Exactly one of eph/geph is populated.
