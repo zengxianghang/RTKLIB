@@ -1241,11 +1241,15 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
     //decode GPS CNAV1 and CNAV2
     if((hdr->sys == SYS_GPS || hdr->sys == SYS_QZS)
        && (hdr->msg_type == NAV_CNAV || hdr->msg_type == NAV_CNV2)) {
+        /* CNAV/CNAV-2 t_oe equals t_oc; Orbit-3 field 1 (data[11]) is t_op,
+         * not t_oe, so the generic toes assignment above is replaced. */
         eph->toe = toc;
+        eph->toes = time2gpst(toc, NULL);
         eph->Adot = data[3];
         eph->delta_n0 = data[5];
         eph->top = data[11];
         eph->delta_n0_dot = data[20];
+        eph->ndot = data[20];   /* rad/s^2, used by eph2pos() */
         eph->urai_ned[0] = data[21];
         eph->urai_ned[1] = data[22];
         eph->urai_ned[2] = data[26];
@@ -1282,6 +1286,7 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         eph->Adot = data[3];
         eph->delta_n0 = data[5];
         eph->delta_n0_dot = data[20];
+        eph->ndot = data[20];   /* rad/s^2, used by eph2pos() */
         eph->flag = data[21];
         eph->top = data[22];
         memcpy(eph->sisai, &data[23], sizeof(eph->sisai));
