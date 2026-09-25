@@ -4044,35 +4044,53 @@ static int canonical_message_type(const eph_t *eph, int sys)
     return 0;
 }
 
+/* Observation-code families (RINEX 4 tables and the signal ICDs).  Every
+ * tracking-component variant of one signal (data, pilot, combined) shares the
+ * navigation family of that signal. */
+static int gps_l1ca(unsigned char c) { return c==CODE_L1C; }
+static int gps_l1py(unsigned char c) { return c==CODE_L1P||c==CODE_L1W||c==CODE_L1Y; }
+static int gps_l1c (unsigned char c) { return c==CODE_L1S||c==CODE_L1L||c==CODE_L1X; }
+static int gps_l2py(unsigned char c)
+{
+    return c==CODE_L2P||c==CODE_L2W||c==CODE_L2Y||c==CODE_L2D;
+}
+static int gps_l2c (unsigned char c) { return c==CODE_L2S||c==CODE_L2L||c==CODE_L2X; }
+static int gps_l5  (unsigned char c) { return c==CODE_L5I||c==CODE_L5Q||c==CODE_L5X; }
+static int qzs_l1cb(unsigned char c) { return c==CODE_L1E; }
+static int gal_e1  (unsigned char c) { return c==CODE_L1B||c==CODE_L1C||c==CODE_L1X; }
+static int gal_e5a (unsigned char c) { return c==CODE_L5I||c==CODE_L5Q||c==CODE_L5X; }
+static int gal_e5b (unsigned char c) { return c==CODE_L7I||c==CODE_L7Q||c==CODE_L7X; }
+static int gal_e5  (unsigned char c) { return c==CODE_L8I||c==CODE_L8Q||c==CODE_L8X; }
+static int gal_e6  (unsigned char c) { return c==CODE_L6B||c==CODE_L6C||c==CODE_L6X; }
+static int bds_b1i (unsigned char c) { return c==CODE_L2I||c==CODE_L2Q||c==CODE_L2X; }
+static int bds_b2i (unsigned char c) { return c==CODE_L7I||c==CODE_L7Q||c==CODE_L7X; }
+static int bds_b3i (unsigned char c) { return c==CODE_L6I||c==CODE_L6Q||c==CODE_L6X; }
+
 static int eph_supports_code(int sys, int type, unsigned char code)
 {
-    if (sys==SYS_GPS) {
-        if (code==CODE_L1C) return type==NAV_LNAV||type==NAV_CNAV||type==NAV_CNV2;
-        if (code==CODE_L1L) return type==NAV_CNV2;
-        if (code==CODE_L2P) return type==NAV_LNAV;
-        if (code==CODE_L2S) return type==NAV_CNAV||type==NAV_CNV2;
-        if (code==CODE_L5Q) return type==NAV_CNAV||type==NAV_CNV2;
-        return 0;
-    }
-    if (sys==SYS_QZS) {
-        if (code==CODE_L1C) return type==NAV_LNAV||type==NAV_CNAV||type==NAV_CNV2;
-        if (code==CODE_L1L) return type==NAV_CNV2;
-        if (code==CODE_L2S) return type==NAV_CNAV||type==NAV_CNV2;
-        if (code==CODE_L5Q) return type==NAV_CNAV||type==NAV_CNV2;
+    if (sys==SYS_GPS||sys==SYS_QZS) {
+        int legacy_l1=gps_l1ca(code)||(sys==SYS_QZS&&qzs_l1cb(code));
+        if (legacy_l1) return type==NAV_LNAV||type==NAV_CNAV||type==NAV_CNV2;
+        if (gps_l1c(code)) return type==NAV_CNV2;
+        if (sys==SYS_GPS&&(gps_l1py(code)||gps_l2py(code))) return type==NAV_LNAV;
+        if (gps_l2c(code)||gps_l5(code)) return type==NAV_CNAV||type==NAV_CNV2;
         return 0;
     }
     if (sys==SYS_GAL) {
-        if (code==CODE_L1C) return type==NAV_INAV||type==NAV_FNAV;
-        if (code==CODE_L5Q) return type==NAV_FNAV;
-        if (code==CODE_L7Q) return type==NAV_INAV;
+        /* E1 users decode either message; E5a is F/NAV and E5b I/NAV
+         * (Galileo OS SIS ICD 5.1).  E5 AltBOC has no dedicated message.
+         * HAS corrections for E6 are referenced to I/NAV (HAS SIS ICD). */
+        if (gal_e1(code)||gal_e5(code)) return type==NAV_INAV||type==NAV_FNAV;
+        if (gal_e5a(code)) return type==NAV_FNAV;
+        if (gal_e5b(code)||gal_e6(code)) return type==NAV_INAV;
         return 0;
     }
     if (sys==SYS_CMP) {
-        if (code==CODE_L2I||code==CODE_L6I||code==CODE_L7I) {
+        if (bds_b1i(code)||bds_b2i(code)||bds_b3i(code)) {
             return type==NAV_D1D2||type==NAV_D1||type==NAV_D2;
         }
         if (code==CODE_L1D) return type==NAV_CNV1;
-        if (code==CODE_L1P||code==CODE_L1X||code==CODE_L5P)
+        if (code==CODE_L1P||code==CODE_L1X||code==CODE_L5P||code==CODE_L5X)
             return type==NAV_CNV1||type==NAV_CNV2;
         if (code==CODE_L7D) return type==NAV_CNV3;
         return 0;
@@ -4176,9 +4194,10 @@ int rtklib_signal_code_supported_ext(int system, int message_type,
                                      unsigned char code)
 {
     if (system==SYS_GLO) {
-        return (code==CODE_L3Q && message_type==NAV_L3OC) ||
-               ((code==CODE_L1C || code==CODE_L2C) &&
-                message_type==NAV_FDMA);
+        if (code==CODE_L3I||code==CODE_L3Q||code==CODE_L3X)
+            return message_type==NAV_L3OC;
+        return (code==CODE_L1C||code==CODE_L1P||code==CODE_L2C||
+                code==CODE_L2P) && message_type==NAV_FDMA;
     }
     return eph_supports_code(system,message_type,code);
 }
@@ -4262,8 +4281,9 @@ static int signal_code_bias_selected(int sys, int type, unsigned char code,
     if (!bias) return -1;
     if (sys==SYS_GLO) {
         if (!geph) return 0;
-        if (code==CODE_L1C && type==NAV_FDMA) *bias=0.0;
-        else if (code==CODE_L2C && type==NAV_FDMA) *bias=CLIGHT*geph->dtaun;
+        if ((code==CODE_L1C||code==CODE_L1P) && type==NAV_FDMA) *bias=0.0;
+        else if ((code==CODE_L2C||code==CODE_L2P) && type==NAV_FDMA)
+            *bias=CLIGHT*geph->dtaun;
         else if (code==CODE_L3Q && type==NAV_L3OC)
             *bias=-CLIGHT*geph->isc_l3ocp;
         else return 0;
@@ -4271,40 +4291,49 @@ static int signal_code_bias_selected(int sys, int type, unsigned char code,
     }
     if (!eph) return 0;
     if (sys==SYS_GPS||sys==SYS_QZS) {
+        int legacy_l1=gps_l1ca(code)||(sys==SYS_QZS&&qzs_l1cb(code));
         if (type==NAV_LNAV) {
-            if (code==CODE_L1C) *bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L2P) {
+            /* IS-GPS-200 20.3.3.3.3.2 single-frequency L1 C/A and P(Y):
+             * T_GD; L2 P(Y): gamma*T_GD.  IS-QZSS-PNT: L1C/A or L1C/B. */
+            if (legacy_l1||(sys==SYS_GPS&&gps_l1py(code)))
+                *bias=CLIGHT*eph->tgd[0];
+            else if (sys==SYS_GPS&&gps_l2py(code)) {
                 *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ2)*eph->tgd[0];
             }
             else return 0;
         }
         else {
-            if (code==CODE_L1C) *bias=CLIGHT*(eph->tgd[0]-eph->isc[0]);
+            /* IS-GPS-200 30.3.3.3.1.1 / IS-GPS-800 3.5.3.9: one ISC per
+             * signal component; a combined (X) tracking of two components
+             * with different ISCs has no single broadcast term. */
+            if (legacy_l1) *bias=CLIGHT*(eph->tgd[0]-eph->isc[0]);
+            else if (code==CODE_L1S) *bias=CLIGHT*(eph->tgd[0]-eph->isc[4]);
             else if (code==CODE_L1L) *bias=CLIGHT*(eph->tgd[0]-eph->isc[5]);
-            else if (code==CODE_L2S) *bias=CLIGHT*(eph->tgd[0]-eph->isc[1]);
+            else if (gps_l2c(code)) *bias=CLIGHT*(eph->tgd[0]-eph->isc[1]);
+            else if (code==CODE_L5I) *bias=CLIGHT*(eph->tgd[0]-eph->isc[2]);
             else if (code==CODE_L5Q) *bias=CLIGHT*(eph->tgd[0]-eph->isc[3]);
             else return 0;
         }
     }
     else if (sys==SYS_GAL) {
-        if (code==CODE_L1C) {
+        if (gal_e1(code)) {
             if (type==NAV_FNAV) *bias=CLIGHT*eph->tgd[0];
             else if (type==NAV_INAV) *bias=CLIGHT*eph->tgd[1];
             else return 0;
         }
-        else if (code==CODE_L5Q&&type==NAV_FNAV) {
+        else if (gal_e5a(code)&&type==NAV_FNAV) {
             *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ5)*eph->tgd[0];
         }
-        else if (code==CODE_L7Q&&type==NAV_INAV) {
+        else if (gal_e5b(code)&&type==NAV_INAV) {
             *bias=CLIGHT*freq_ratio_squared(FREQ1,FREQ7)*eph->tgd[1];
         }
         else return 0;
     }
     else if (sys==SYS_CMP) {
         if (type==NAV_D1D2||type==NAV_D1||type==NAV_D2) {
-            if (code==CODE_L2I) *bias=CLIGHT*eph->tgd[0];
-            else if (code==CODE_L7I) *bias=CLIGHT*eph->tgd[1];
-            else if (code==CODE_L6I) *bias=0.0;
+            if (bds_b1i(code)) *bias=CLIGHT*eph->tgd[0];
+            else if (bds_b2i(code)) *bias=CLIGHT*eph->tgd[1];
+            else if (bds_b3i(code)) *bias=0.0;
             else return 0;
         }
         else if (type==NAV_CNV1||type==NAV_CNV2) {
