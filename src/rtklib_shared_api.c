@@ -1886,8 +1886,10 @@ int rtklib_shared_azel(const double receiver_llh_rad_m[3],
         !valid_vector(receiver_llh_rad_m, 3) || !valid_vector(los, 3) ||
         norm(los, 3) <= 0.0)
         return RTKLIB_SHARED_INVALID_ARGUMENT;
-    if (satazel(receiver_llh_rad_m, los, azel_rad) < 0.0 ||
-        !valid_vector(azel_rad, 2)) return RTKLIB_SHARED_CALL_FAILED;
+    /* A below-horizon line of sight is a valid geometric result; elevation
+     * masks belong to the consumer.  Only a non-finite result fails. */
+    (void)satazel(receiver_llh_rad_m, los, azel_rad);
+    if (!valid_vector(azel_rad, 2)) return RTKLIB_SHARED_CALL_FAILED;
     return RTKLIB_SHARED_OK;
 }
 
