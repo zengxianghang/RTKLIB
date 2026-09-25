@@ -683,11 +683,37 @@ static int append_loaded_metadata(rtklib_shared_nav_store_t *store,
     return 1;
 }
 
+/* RTKLIB's expath() recognises only '\\' as a Windows directory separator,
+ * while CMake and callers commonly supply absolute paths with '/'.  Without
+ * normalisation a valid POSIX-style path reaches Windows as one long file
+ * name, expath() rebuilds the match from an empty directory prefix, and the
+ * subsequent open fails -- so supported RINEX NAV input loaded on Linux and
+ * macOS but not on Windows.  Normalise at this API boundary, exactly as the
+ * simulator's own RTKLIB adapter has always done, so one caller-supplied path
+ * behaves the same on every platform. */
+static int normalize_rinex_path(const char *path, char *out, size_t capacity)
+{
+    size_t i;
+
+    if (!path || !out || capacity == 0) return 0;
+    for (i = 0; i < capacity - 1; ++i) {
+        char character = path[i];
+#ifdef _WIN32
+        if (character == '/') character = '\\';
+#endif
+        out[i] = character;
+        if (character == '\0') return i != 0;
+    }
+    out[capacity - 1] = '\0';
+    return 0;
+}
+
 int rtklib_shared_nav_load_rinex(rtklib_shared_nav_store_t *store,
                                  const char *path, const char *options,
                                  const char *source_id)
 {
     int old_eph, old_geph, old_ion, old_ns, old_neop, old_nsto;
+    char load_path[MAXSTRPATH];
     size_t old_records, old_ion_records;
     rtklib_shared_record_id_t old_next_record_id;
     uint64_t old_rinex_order;
@@ -708,7 +734,9 @@ int rtklib_shared_nav_load_rinex(rtklib_shared_nav_store_t *store,
     old_ion_records = store->nion_records;
     old_next_record_id = store->next_record_id;
     old_rinex_order = store->next_rinex_order;
-    stat = readrnx(path, 0, options ? options : "", NULL,
+    if (!normalize_rinex_path(path, load_path, sizeof(load_path)))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    stat = readrnx(load_path, 0, options ? options : "", NULL,
                    &store->nav, NULL);
     if (stat <= 0) {
         /* readrnx may have allocated records before a later file/parse
