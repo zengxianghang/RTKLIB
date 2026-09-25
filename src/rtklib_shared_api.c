@@ -1642,20 +1642,23 @@ static int signal_frequency_hz(int system, unsigned char code, int fcn,
             if (freq == 1) *frequency = FREQ1_GLO + DFRQ1_GLO * fcn;
             else if (freq == 2) *frequency = FREQ2_GLO + DFRQ2_GLO * fcn;
             else return 0;
-        } else if (code == CODE_L3Q && freq == 3) {
+        } else if ((code == CODE_L3I || code == CODE_L3Q ||
+                    code == CODE_L3X) && freq == 3) {
             *frequency = FREQ3_GLO;
         } else return 0;
     } else if (system == SYS_CMP) {
         /* The legacy table numbers BDS signals by RINEX band.  Resolve the
          * physical carrier from the code so B1I/B1C/B2/B3 and newer
          * B2a/B2b do not inherit the GPS frequency table by accident. */
-        if (code == CODE_L2I || code == CODE_L2Q || code == CODE_L1I ||
-            code == CODE_L1Q) *frequency = FREQ1_CMP;
+        if (code == CODE_L2I || code == CODE_L2Q || code == CODE_L2X ||
+            code == CODE_L1I || code == CODE_L1Q) *frequency = FREQ1_CMP;
         else if (code == CODE_L1D || code == CODE_L1P || code == CODE_L1X)
             *frequency = FREQ1;
-        else if (code == CODE_L7I || code == CODE_L7Q) *frequency = FREQ2_CMP;
-        else if (code == CODE_L6I || code == CODE_L6Q) *frequency = FREQ3_CMP;
-        else if (code == CODE_L5P) *frequency = FREQ5;
+        else if (code == CODE_L7I || code == CODE_L7Q || code == CODE_L7X)
+            *frequency = FREQ2_CMP;
+        else if (code == CODE_L6I || code == CODE_L6Q || code == CODE_L6X)
+            *frequency = FREQ3_CMP;
+        else if (code == CODE_L5P || code == CODE_L5X) *frequency = FREQ5;
         else if (code == CODE_L7D) *frequency = FREQ7;
         else return 0;
     } else {

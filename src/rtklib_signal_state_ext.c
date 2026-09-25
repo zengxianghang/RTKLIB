@@ -3,22 +3,49 @@
 #include <math.h>
 #include <string.h>
 
-/* GPS CNAV stores L1/L2/L5 health in bits 2/1/0 of the RINEX SV-health
- * field. GPS CNV2 carries the L1C health bit. Keep the raw eph->svh value
- * untouched in nav_t and normalize only the health returned for the selected
- * observation signal. Other message families retain the legacy semantics. */
+/* Signal-level health from the raw RINEX SV-health field.  The raw value
+ * stays untouched in nav_t; only the health returned for the selected
+ * observation signal is normalized.
+ * - GPS/QZSS CNAV: L1/L2/L5 health in bits 2/1/0 (IS-GPS-200 30.3.3.1.1.2,
+ *   IS-QZSS-PNT-006 4.3.2).
+ * - GPS/QZSS CNAV-2: the L1C health bit.
+ * - QZSS LNAV (IS-QZSS-PNT-006 4.1.2.3(4)): bit 5 is the health of the
+ *   transmitted L1C/A or L1C/B signal; bits 4..0 are L1C/A, L2C, L5, L1C and
+ *   L1C/B.  The health bit of the L1 legacy signal that is not transmitted
+ *   is always 1, so a nonzero raw value is not by itself unhealthy.
+ * Other families keep the raw value (nonzero = unhealthy). */
+static int gps_qzs_band(int system, unsigned char code)
+{
+    if (code==CODE_L1C||code==CODE_L1S||code==CODE_L1L||code==CODE_L1X||
+        (system==SYS_QZS&&code==CODE_L1E)) return 1;
+    if (code==CODE_L2S||code==CODE_L2L||code==CODE_L2X) return 2;
+    if (code==CODE_L5I||code==CODE_L5Q||code==CODE_L5X) return 5;
+    return 0;
+}
+
 int rtklib_signal_health_ext(int system, int message_type,
                              unsigned char code, int raw_svh)
 {
-    if (system!=SYS_GPS) return raw_svh;
+    int band;
+
+    if (system!=SYS_GPS&&system!=SYS_QZS) return raw_svh;
+    band=gps_qzs_band(system,code);
 
     if (message_type==NAV_CNAV) {
-        if (code==CODE_L1C||code==CODE_L1L) return raw_svh&4?1:0;
-        if (code==CODE_L2S)                 return raw_svh&2?1:0;
-        if (code==CODE_L5Q)                 return raw_svh&1?1:0;
+        if (band==1) return raw_svh&4?1:0;
+        if (band==2) return raw_svh&2?1:0;
+        if (band==5) return raw_svh&1?1:0;
     }
     else if (message_type==NAV_CNV2) {
-        if (code==CODE_L1C||code==CODE_L1L) return raw_svh&1?1:0;
+        if (band==1) return raw_svh&1?1:0;
+    }
+    else if (system==SYS_QZS&&message_type==NAV_LNAV&&raw_svh>=0&&
+             raw_svh<64) {
+        if (code==CODE_L1C) return raw_svh&(32|16)?1:0;
+        if (code==CODE_L1E) return raw_svh&(32|1)?1:0;
+        if (band==2) return raw_svh&8?1:0;
+        if (band==5) return raw_svh&4?1:0;
+        if (band==1) return raw_svh&2?1:0;
     }
     return raw_svh;
 }

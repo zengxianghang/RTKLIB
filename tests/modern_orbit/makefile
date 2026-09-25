@@ -9,7 +9,8 @@ ORACLE = fixtures/oracle_vectors.csv
 BASELINE = fixtures/legacy_baseline.csv
 URA_ORACLE = fixtures/ura_oracle_vectors.csv
 
-TESTS = test_modern_orbit_terms test_shared_modern_orbit test_modern_ura
+TESTS = test_modern_orbit_terms test_shared_modern_orbit test_modern_ura \
+	test_signal_family
 
 all: $(TESTS)
 
@@ -25,10 +26,14 @@ test_shared_modern_orbit: test_shared_modern_orbit.c lib
 test_modern_ura: test_modern_ura.c lib
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
 
+test_signal_family: test_signal_family.c lib
+	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
+
 test: all
 	./test_modern_orbit_terms $(FIXTURE) $(ORACLE) $(BASELINE)
 	./test_shared_modern_orbit $(FIXTURE) $(ORACLE)
 	./test_modern_ura $(FIXTURE) $(URA_ORACLE)
+	./test_signal_family $(FIXTURE)
 
 # Regenerate the independent oracle vectors (needs python3).
 oracle:
