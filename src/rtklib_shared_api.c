@@ -1131,6 +1131,21 @@ static int is_modern_gps_qzs_urai_record(const shared_record_t *record)
            record->identity.family == RTKLIB_SHARED_NAV_CNV2;
 }
 
+/* BDS GEO satellites (C01-C05, C59-C63) broadcasting B-CNAV1/2/3: no real
+ * broadcast evidence exists yet for the GEO B-CNAV orbit algorithm, so the
+ * public state is contained rather than published unverified (Issue #27). */
+static int is_bds_geo_bcnav_record(const shared_record_t *record)
+{
+    uint32_t prn;
+    if (!record || record->kind != RTKLIB_SHARED_RECORD_EPH ||
+        record->identity.system != RTKLIB_SHARED_SYS_BDS) return 0;
+    prn = record->identity.prn;
+    if (prn > 5 && prn < 59) return 0;
+    return record->identity.family == RTKLIB_SHARED_NAV_CNV1 ||
+           record->identity.family == RTKLIB_SHARED_NAV_CNV2 ||
+           record->identity.family == RTKLIB_SHARED_NAV_CNV3;
+}
+
 static void set_state_health(rtklib_shared_state_result_t *result,
                              int system, uint32_t family, unsigned char code)
 {
@@ -1306,7 +1321,8 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
         const eph_t *eph;
         if (record->index < 0 || record->index >= store->nav.n) return 0;
         eph = &store->nav.eph[record->index];
-        if (is_modern_gps_qzs_urai_record(record)) {
+        if (is_modern_gps_qzs_urai_record(record) ||
+            is_bds_geo_bcnav_record(record)) {
             /* The state query is deliberately all-or-nothing for this
              * unsupported accuracy model.  Identity and health were bound
              * by rtklib_shared_state_query() before reaching here; leave the

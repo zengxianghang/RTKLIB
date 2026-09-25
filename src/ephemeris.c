@@ -194,12 +194,33 @@ extern double eph2clk(gtime_t time, const eph_t *eph)
 *          satellite clock includes relativity correction without code bias
 *          (tgd or bgd)
 *-----------------------------------------------------------------------------*/
+/* BDS GEO satellites broadcasting D2 ephemeris: BDS-2 C01-C05 and BDS-3
+ * C59-C63 (ref [9]).  Their D1/D2 orbit parameters are referenced to a frame
+ * rotated by -5 deg and need the GEO transformation below. */
+static int cmp_geo_prn(int prn)
+{
+    return prn<=5||prn>=59;
+}
+/* modern broadcast families whose orbit model includes the semi-major-axis
+ * rate and the mean-motion-difference rate: GPS/QZSS CNAV and CNAV-2, BDS
+ * B-CNAV1/B-CNAV2/B-CNAV3.  The family is the decoded message type of the
+ * record, never inferred from signal or PRN. */
+extern int eph_modern_family(const eph_t *eph, int sys)
+{
+    int type=eph->hdr.msg_type;
+
+    if (sys==SYS_GPS||sys==SYS_QZS) return type==NAV_CNAV||type==NAV_CNV2;
+    if (sys==SYS_CMP) {
+        return type==NAV_CNV1||type==NAV_CNV2||type==NAV_CNV3;
+    }
+    return 0;
+}
 extern void eph2pos(gtime_t time, const eph_t *eph, double *rs, double *dts,
                     double *var)
 {
     double tk,M,E,Ek,sinE,cosE,u,r,i,O,sin2u,cos2u,x,y,sinO,cosO,cosi,mu,omge;
-    double xg,yg,zg,sino,coso;
-    int n,sys,prn;
+    double xg,yg,zg,sino,coso,A,deln;
+    int n,sys,prn,modern;
     
     rtktrace(4,"eph2pos : time=%s sat=%2d\n",time_str(time,3),eph->sat);
     
@@ -214,7 +235,18 @@ extern void eph2pos(gtime_t time, const eph_t *eph, double *rs, double *dts,
         case SYS_CMP: mu=MU_CMP; omge=OMGE_CMP; break;
         default:      mu=MU_GPS; omge=OMGE;     break;
     }
-    M=eph->M0+(sqrt(mu/(eph->A*eph->A*eph->A))+eph->deln)*tk;
+    /* Modern families (IS-GPS-200 table 30-II, BDS-SIS-ICD-B1C/B2a/B2b):
+     * A_k=A_0+Adot*tk, n_0=sqrt(mu/A_0^3), delta_n_A=delta_n_0+ndot*tk/2,
+     * where eph->A is A_0 and eph->deln is delta_n_0.  Legacy families never
+     * use Adot/ndot even if a value is stored. */
+    modern=eph_modern_family(eph,sys);
+    A=eph->A;
+    deln=eph->deln;
+    if (modern) {
+        A+=eph->Adot*tk;
+        deln+=0.5*eph->ndot*tk;
+    }
+    M=eph->M0+(sqrt(mu/(eph->A*eph->A*eph->A))+deln)*tk;
     
     for (n=0,E=M,Ek=0.0;fabs(E-Ek)>RTOL_KEPLER&&n<MAX_ITER_KEPLER;n++) {
         Ek=E; E-=(E-eph->e*sin(E)-M)/(1.0-eph->e*cos(E));
@@ -228,7 +260,7 @@ extern void eph2pos(gtime_t time, const eph_t *eph, double *rs, double *dts,
     rtktrace(4,"kepler: sat=%2d e=%8.5f n=%2d del=%10.3e\n",eph->sat,eph->e,n,E-Ek);
     
     u=atan2(sqrt(1.0-eph->e*eph->e)*sinE,cosE-eph->e)+eph->omg;
-    r=eph->A*(1.0-eph->e*cosE);
+    r=A*(1.0-eph->e*cosE);
     i=eph->i0+eph->idot*tk;
     sin2u=sin(2.0*u); cos2u=cos(2.0*u);
     u+=eph->cus*sin2u+eph->cuc*cos2u;
@@ -236,8 +268,9 @@ extern void eph2pos(gtime_t time, const eph_t *eph, double *rs, double *dts,
     i+=eph->cis*sin2u+eph->cic*cos2u;
     x=r*cos(u); y=r*sin(u); cosi=cos(i);
     
-    /* beidou geo satellite (ref [9]) */
-    if (sys==SYS_CMP&&prn<=5) {
+    /* beidou geo satellite D1/D2 ephemeris (ref [9]); B-CNAV records use
+     * the common algorithm */
+    if (sys==SYS_CMP&&!modern&&cmp_geo_prn(prn)) {
         O=eph->OMG0+eph->OMGd*tk-omge*eph->toes;
         sinO=sin(O); cosO=cos(O);
         xg=x*cosO-y*cosi*sinO;
@@ -259,7 +292,7 @@ extern void eph2pos(gtime_t time, const eph_t *eph, double *rs, double *dts,
     *dts=eph->f0+eph->f1*tk+eph->f2*tk*tk;
     
     /* relativity correction */
-    *dts-=2.0*sqrt(mu*eph->A)*eph->e*sinE/SQR(CLIGHT);
+    *dts-=2.0*sqrt(mu*A)*eph->e*sinE/SQR(CLIGHT);
     
     /* position and clock error variance.  eph_t.sva is an index only when
      * URA2URAI is enabled; the default build stores RINEX metres. */

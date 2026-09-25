@@ -1608,6 +1608,7 @@ extern int writernx(const char *file, int rcv, const char *opt, obs_t *obs,
 extern double eph2clk (gtime_t time, const eph_t  *eph);
 extern double geph2clk(gtime_t time, const geph_t *geph);
 extern double seph2clk(gtime_t time, const seph_t *seph);
+extern int  eph_modern_family(const eph_t *eph, int sys);
 extern void eph2pos (gtime_t time, const eph_t  *eph,  double *rs, double *dts,
                      double *var);
 extern void geph2pos(gtime_t time, const geph_t *geph, double *rs, double *dts,
