@@ -85,11 +85,34 @@ int main(void)
                   RTKLIB_SHARED_INVALID_ARGUMENT,
               "missing output accepted");
     }
+    {
+        /* Azimuth/elevation: bit-exact with satazel, including a line of
+         * sight below the horizon (negative elevation is valid geometry). */
+        double pos[3] = {0.53, 1.99, 30.5}, rr[3], sat_up[3], sat_down[3];
+        double e_up[3], e_down[3], ref[2], azel[2];
+        int i;
+        pos2ecef(pos, rr);
+        for (i = 0; i < 3; i++) {
+            sat_up[i] = rr[i] * 4.0;           /* toward the zenith */
+            sat_down[i] = -rr[i] * 3.0 + 1.0E6; /* through the earth */
+        }
+        geodist(sat_up, rr, e_up);
+        geodist(sat_down, rr, e_down);
+        CHECK(rtklib_shared_azel(pos, e_up, azel) == RTKLIB_SHARED_OK &&
+              satazel(pos, e_up, ref) > 0.0 && azel[0] == ref[0] &&
+              azel[1] == ref[1],
+              "above-horizon azel differs from satazel");
+        CHECK(rtklib_shared_azel(pos, e_down, azel) == RTKLIB_SHARED_OK &&
+              satazel(pos, e_down, ref) < 0.0 && azel[0] == ref[0] &&
+              azel[1] == ref[1] && azel[1] < 0.0,
+              "below-horizon azel was not returned as negative elevation");
+    }
     if (failures) {
         fprintf(stderr, "public_models: FAIL (%d)\n", failures);
         return 1;
     }
     printf("public_models: PASS (%d grid points; Klobuchar and Saastamoinen "
-           "bit-exact with ionmodel/tropmodel)\n", checked);
+           "bit-exact with ionmodel/tropmodel; azel incl. below horizon)\n",
+           checked);
     return 0;
 }
