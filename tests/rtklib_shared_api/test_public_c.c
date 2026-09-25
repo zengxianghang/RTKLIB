@@ -19,6 +19,7 @@ int main(void)
     rtklib_shared_record_id_t record_id = 0;
     rtklib_shared_time_t time = {0, 0.0};
     double llh[3] = {0.0, 0.0, 0.0};
+    double klobuchar[8] = {0.0};
     double ecef[3] = {0.0, 0.0, 0.0};
     double satellite[3] = {20200000.0, 0.0, 0.0};
     double los[3] = {0.0, 0.0, 0.0};
@@ -68,6 +69,8 @@ int main(void)
     ura_result.struct_size = (uint32_t)sizeof(ura_result);
     (void)rtklib_shared_modern_ura_query(store, &state_query, 0.5,
                                          &ura_result);
+    (void)rtklib_shared_tropo_saastamoinen(time, llh, azel, 0.0, &delay);
+    (void)rtklib_shared_klobuchar(time, klobuchar, llh, azel, &delay);
     (void)rtklib_shared_ion_query(store, RTKLIB_SHARED_SYS_GPS,
                                   RTKLIB_SHARED_NAV_LNAV, time, 0,
                                   &ion_result);

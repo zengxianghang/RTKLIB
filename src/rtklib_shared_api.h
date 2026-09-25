@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define RTKLIB_SHARED_ABI_MAJOR 1u
-#define RTKLIB_SHARED_ABI_MINOR 1u
+#define RTKLIB_SHARED_ABI_MINOR 2u
 #define RTKLIB_SHARED_ABI_VERSION \
     ((RTKLIB_SHARED_ABI_MAJOR << 16) | RTKLIB_SHARED_ABI_MINOR)
 /* Every ABI 1.x POD keeps the 1.0 layout and size.  A caller may keep
@@ -475,6 +475,27 @@ int rtklib_shared_tropo(const rtklib_shared_nav_store_t *store,
                         const double receiver_llh_rad_m[3],
                         const double azel_rad[2], int32_t tropo_option,
                         double *delay_m, double *variance_m2);
+
+/* ABI 1.2 explicit-parameter correction models.  Unlike the store-bound
+ * helpers above, the caller supplies every model parameter, so no store
+ * record or library-internal default is consulted:
+ * - Saastamoinen troposphere with standard atmosphere and the caller's
+ *   relative humidity in [0, 1] (RTKLIB tropmodel);
+ * - Klobuchar reference-frequency ionosphere delay from the caller's eight
+ *   broadcast coefficients alpha0..3, beta0..3 (RTKLIB ionmodel).  All-zero
+ *   coefficients return UNAVAILABLE instead of falling back to RTKLIB's
+ *   built-in 2004 defaults.
+ * Both return OK with a zero delay for a non-positive elevation or an
+ * out-of-model receiver height, exactly as the underlying RTKLIB models. */
+int rtklib_shared_tropo_saastamoinen(rtklib_shared_time_t time,
+                                     const double receiver_llh_rad_m[3],
+                                     const double azel_rad[2],
+                                     double relative_humidity,
+                                     double *delay_m);
+int rtklib_shared_klobuchar(rtklib_shared_time_t time,
+                            const double coefficients[8],
+                            const double receiver_llh_rad_m[3],
+                            const double azel_rad[2], double *delay_m);
 
 /* Stable satellite-number and three-character identifier mappings. */
 int rtklib_shared_satellite_number(uint32_t system, uint32_t prn,

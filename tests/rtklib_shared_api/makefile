@@ -14,7 +14,7 @@ RINEX2_SVA_FIXTURE = ../../test/data/rinex/brdc1820.10n
 TESTS = test_rtklib_shared_api test_public_c test_public_cpp \
 	test_rinex2_legacy_sva_metric test_public_legacy_sva_metric \
 	test_modern_urai_private_parse test_modern_urai_containment \
-	test_public_b1c
+	test_public_b1c test_public_models
 
 all: $(TESTS)
 
@@ -42,6 +42,9 @@ test_modern_urai_private_parse: test_modern_urai_private_parse.c lib
 test_modern_urai_containment: test_modern_urai_containment.c lib
 	$(CC) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
+test_public_models: test_public_models.c lib
+	$(CC) $(CFLAGS) $< $(LIB) $(LOCAL_LDFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
+
 test_public_b1c: test_public_b1c.c lib
 	$(CC) $(CFLAGS) $< $(LIB) $(LOCAL_LDFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -55,6 +58,7 @@ test: all
 	./test_modern_urai_private_parse $(FIXTURE) $(PROVENANCE)
 	./test_modern_urai_containment $(FIXTURE)
 	./test_public_b1c $(FIXTURE)
+	./test_public_models
 
 clean:
 	rm -f $(TESTS) $(addsuffix .exe,$(TESTS))

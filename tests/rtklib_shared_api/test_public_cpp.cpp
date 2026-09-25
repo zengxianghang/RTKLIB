@@ -56,6 +56,12 @@ int main()
     ura.abi_version = RTKLIB_SHARED_ABI_VERSION;
     ura.struct_size = static_cast<uint32_t>(sizeof(ura));
     (void)rtklib_shared_modern_ura_query(store, &query, 0.5, &ura);
+    double model_delay = 0.0;
+    const double llh3[3] = {0.0, 0.0, 0.0};
+    const double coeff8[8] = {0.0};
+    const double azel2[2] = {0.0, 1.0};
+    (void)rtklib_shared_tropo_saastamoinen(time, llh3, azel2, 0.0, &model_delay);
+    (void)rtklib_shared_klobuchar(time, coeff8, llh3, azel2, &model_delay);
     (void)rtklib_shared_ion_query(store, RTKLIB_SHARED_SYS_GPS,
                                   RTKLIB_SHARED_NAV_LNAV, time, 0,
                                   &ion_result);
