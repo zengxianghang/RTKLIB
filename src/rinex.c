@@ -1244,7 +1244,9 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
         /* CNAV/CNAV-2 t_oe equals t_oc; Orbit-3 field 1 (data[11]) is t_op,
          * not t_oe, so the generic toes assignment above is replaced. */
         eph->toe = toc;
-        eph->toes = time2gpst(toc, NULL);
+        eph->toes = time2gpst(toc, &eph->week);
+        /* data[21] is URAI_NED0 here, not a week: the week of t_oe/t_oc
+         * replaces the generic week assignment above. */
         eph->Adot = data[3];
         eph->delta_n0 = data[5];
         eph->top = data[11];

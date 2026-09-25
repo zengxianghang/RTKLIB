@@ -42,11 +42,20 @@ static int finite_value(double value)
     return isfinite(value) != 0;
 }
 
+/* ABI 1.x keeps the 1.0 POD layouts, so a caller may declare any minor
+ * version up to the library's; semantics follow the declared version. */
 static int valid_header(uint32_t abi_version, uint32_t struct_size,
                         size_t expected_size)
 {
-    return abi_version == RTKLIB_SHARED_ABI_VERSION &&
+    return (abi_version >> 16) == RTKLIB_SHARED_ABI_MAJOR &&
+           (abi_version & 0xFFFFu) <= RTKLIB_SHARED_ABI_MINOR &&
            (size_t)struct_size >= expected_size;
+}
+
+static int declares_minor(uint32_t abi_version, uint32_t minor)
+{
+    return (abi_version >> 16) == RTKLIB_SHARED_ABI_MAJOR &&
+           (abi_version & 0xFFFFu) >= minor;
 }
 
 static int copy_text(char *destination, size_t capacity, const char *source,
@@ -1131,6 +1140,17 @@ static int is_modern_gps_qzs_urai_record(const shared_record_t *record)
            record->identity.family == RTKLIB_SHARED_NAV_CNV2;
 }
 
+/* BDS B-CNAV1/2/3 accuracy fields are SISAI/SISMAI indices; the decoded
+ * scalar eph.sva is an index, not metres. */
+static int is_bds_bcnav_record(const shared_record_t *record)
+{
+    if (!record || record->kind != RTKLIB_SHARED_RECORD_EPH ||
+        record->identity.system != RTKLIB_SHARED_SYS_BDS) return 0;
+    return record->identity.family == RTKLIB_SHARED_NAV_CNV1 ||
+           record->identity.family == RTKLIB_SHARED_NAV_CNV2 ||
+           record->identity.family == RTKLIB_SHARED_NAV_CNV3;
+}
+
 /* BDS GEO satellites (C01-C05, C59-C63) broadcasting B-CNAV1/2/3: no real
  * broadcast evidence exists yet for the GEO B-CNAV orbit algorithm, so the
  * public state is contained rather than published unverified (Issue #27). */
@@ -1303,10 +1323,13 @@ static const shared_record_t *record_for_query(
     return record;
 }
 
+/* metric_split: the caller declared ABI >= 1.1, so a record whose accuracy
+ * is not a scalar metric SVA publishes its state with variance_status
+ * UNSUPPORTED instead of being contained as a whole (Issue #20). */
 static int evaluate_record(const rtklib_shared_nav_store_t *store,
                            const shared_record_t *record,
                            rtklib_shared_time_t evaluation_time,
-                           unsigned char code,
+                           unsigned char code, int metric_split,
                            rtklib_shared_state_result_t *result)
 {
     double state[6] = {0}, next_state[6] = {0};
@@ -1321,7 +1344,7 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
         const eph_t *eph;
         if (record->index < 0 || record->index >= store->nav.n) return 0;
         eph = &store->nav.eph[record->index];
-        if (is_modern_gps_qzs_urai_record(record) ||
+        if ((is_modern_gps_qzs_urai_record(record) && !metric_split) ||
             is_bds_geo_bcnav_record(record)) {
             /* The state query is deliberately all-or-nothing for this
              * unsupported accuracy model.  Identity and health were bound
@@ -1355,6 +1378,14 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
     result->clock_bias_s = dts[0];
     result->clock_drift_sps = (next_dts[0] - dts[0]) / 1E-3;
     result->variance_m2 = variance;
+    if (metric_split) {
+        if (is_modern_gps_qzs_urai_record(record) ||
+            is_bds_bcnav_record(record)) {
+            result->variance_m2 = NAN;
+            result->variance_status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        }
+        else result->variance_status = RTKLIB_SHARED_QUERY_AVAILABLE;
+    }
     result->state_valid = 1;
     set_state_health(result, system, record->identity.family, code);
     return stat;
@@ -1366,11 +1397,16 @@ int rtklib_shared_state_query(const rtklib_shared_nav_store_t *store,
 {
     const shared_record_t *record;
     int satellite, explicit_id, stat, selection_error = RTKLIB_SHARED_OK;
+    int metric_split;
+    uint32_t declared;
 
     if (!result || !valid_header(result->abi_version, result->struct_size,
                                  sizeof(*result)))
         return RTKLIB_SHARED_INVALID_ARGUMENT;
+    declared = result->abi_version;
+    metric_split = declares_minor(declared, 1);
     init_state_result(result);
+    result->abi_version = declared;
     if (!store || !request_is_valid(query, &satellite))
         return RTKLIB_SHARED_INVALID_ARGUMENT;
     explicit_id = query->selected_record_id != 0;
@@ -1394,7 +1430,7 @@ int rtklib_shared_state_query(const rtklib_shared_nav_store_t *store,
         result->identity = record->identity;
     }
     stat = evaluate_record(store, record, query->evaluation_time,
-                           query->rtklib_code, result);
+                           query->rtklib_code, metric_split, result);
     if (stat == RTKLIB_SHARED_UNSUPPORTED) {
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
@@ -1467,6 +1503,120 @@ int rtklib_shared_bias_query(const rtklib_shared_nav_store_t *store,
         return RTKLIB_SHARED_UNSUPPORTED;
     }
     result->raw_code_bias_m = bias;
+    result->status = RTKLIB_SHARED_QUERY_AVAILABLE;
+    return RTKLIB_SHARED_OK;
+}
+
+/* Nominal URA value X (metres) of a CNAV URA_ED / URA_NED0 index N in
+ * [-15, 14] (IS-GPS-200N 30.3.3.1.1.4 and 30.3.3.2.4). */
+static double cnav_nominal_ura(int n)
+{
+    if (n == 1) return 2.8;
+    if (n == 3) return 5.7;
+    if (n == 5) return 11.3;
+    return n <= 6 ? pow(2.0, 1.0 + n / 2.0) : pow(2.0, n - 2.0);
+}
+
+static int integral_in(double value, int low, int high, int *out)
+{
+    if (!finite_value(value) || value != floor(value) || value < low ||
+        value > high) return 0;
+    *out = (int)value;
+    return 1;
+}
+
+static void init_modern_ura_result(rtklib_shared_modern_ura_result_t *result)
+{
+    uint32_t declared = result->abi_version;
+    memset(result, 0, sizeof(*result));
+    result->abi_version = declared;
+    result->struct_size = (uint32_t)sizeof(*result);
+    result->status = RTKLIB_SHARED_QUERY_FAILED;
+    result->elapsed_since_top_s = NAN;
+    result->nominal_ura_ed_m = NAN;
+    result->adjusted_ura_ed_m = NAN;
+    result->ura_ned_m = NAN;
+    result->ura_m = NAN;
+    result->variance_m2 = NAN;
+    init_identity(&result->identity);
+}
+
+int rtklib_shared_modern_ura_query(const rtklib_shared_nav_store_t *store,
+                                   const rtklib_shared_state_query_t *query,
+                                   double elevation_rad,
+                                   rtklib_shared_modern_ura_result_t *result)
+{
+    const shared_record_t *record;
+    const eph_t *eph;
+    int satellite, selection_error, ed, ned0, ned1, ned2, wn_op;
+    double dt, ura_ned;
+
+    if (!result || !valid_header(result->abi_version, result->struct_size,
+                                 sizeof(*result)) ||
+        !declares_minor(result->abi_version, 1))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    init_modern_ura_result(result);
+    if (!store || !request_is_valid(query, &satellite) ||
+        !finite_value(elevation_rad) || elevation_rad < 0.0 ||
+        elevation_rad > PI / 2.0) return RTKLIB_SHARED_INVALID_ARGUMENT;
+    record = record_for_query(store, query, satellite, &selection_error);
+    if (!record) {
+        if (selection_error == RTKLIB_SHARED_INVALID_ARGUMENT)
+            return RTKLIB_SHARED_INVALID_ARGUMENT;
+        result->status = selection_error == RTKLIB_SHARED_ALLOCATION_ERROR ?
+            RTKLIB_SHARED_QUERY_FAILED : RTKLIB_SHARED_QUERY_UNAVAILABLE;
+        return selection_error == RTKLIB_SHARED_ALLOCATION_ERROR ?
+            RTKLIB_SHARED_ALLOCATION_ERROR : RTKLIB_SHARED_UNAVAILABLE;
+    }
+    result->identity = record->identity;
+    if (selection_error == RTKLIB_SHARED_UNSUPPORTED ||
+        !is_modern_gps_qzs_urai_record(record)) {
+        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    if (record->index < 0 || record->index >= store->nav.n) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    eph = &store->nav.eph[record->index];
+    if (!integral_in(eph->urai_ed, -16, 15, &ed) ||
+        !integral_in(eph->urai_ned[0], -16, 15, &ned0) ||
+        !integral_in(eph->urai_ned[1], 0, 7, &ned1) ||
+        !integral_in(eph->urai_ned[2], 0, 7, &ned2) ||
+        !integral_in(eph->wn_op, 0, RTKLIB_SHARED_MAX_WEEK, &wn_op) ||
+        !finite_value(eph->top) || eph->top < 0.0 || eph->top >= 604800.0) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    /* RINEX 4 WN_op is the continuous week of t_op, which precedes the
+     * record's t_oe by at most a few hours; anything else is malformed. */
+    if (abs(wn_op - record->identity.toe.week) > 1) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    result->ura_ed_index = ed;
+    result->ura_ned0_index = ned0;
+    result->ura_ned1_index = ned1;
+    result->ura_ned2_index = ned2;
+    dt = query->evaluation_time.sow - eph->top +
+         604800.0 * (double)(query->evaluation_time.week - wn_op);
+    result->elapsed_since_top_s = dt;
+    /* Indices 15 and -16 signal the absence of an accuracy prediction; the
+     * NED equations are defined from t_op onwards. */
+    if (ed == 15 || ed == -16 || ned0 == 15 || ned0 == -16 || dt < 0.0) {
+        result->status = RTKLIB_SHARED_QUERY_UNAVAILABLE;
+        return RTKLIB_SHARED_UNAVAILABLE;
+    }
+    ura_ned = cnav_nominal_ura(ned0) + ldexp(1.0, -(14 + ned1)) * dt;
+    if (dt > 93600.0)
+        ura_ned += ldexp(1.0, -(28 + ned2)) * (dt - 93600.0) * (dt - 93600.0);
+    result->nominal_ura_ed_m = cnav_nominal_ura(ed);
+    result->adjusted_ura_ed_m =
+        result->nominal_ura_ed_m * sin(elevation_rad + PI / 2.0);
+    result->ura_ned_m = ura_ned;
+    result->ura_m = sqrt(result->adjusted_ura_ed_m * result->adjusted_ura_ed_m +
+                         ura_ned * ura_ned);
+    result->variance_m2 = result->ura_m * result->ura_m;
     result->status = RTKLIB_SHARED_QUERY_AVAILABLE;
     return RTKLIB_SHARED_OK;
 }

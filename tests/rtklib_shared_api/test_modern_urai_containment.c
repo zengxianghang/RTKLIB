@@ -90,7 +90,16 @@ static void init_state_query(rtklib_shared_state_query_t *query,
     query->selected_record_id = selected_record_id;
 }
 
+/* The Phase A containment contract is the ABI 1.0 behaviour; ABI 1.1
+ * callers get the state with an UNSUPPORTED variance metric instead. */
 static void init_state_result(rtklib_shared_state_result_t *result)
+{
+    memset(result, 0, sizeof(*result));
+    result->abi_version = RTKLIB_SHARED_ABI_VERSION_1_0;
+    result->struct_size = (uint32_t)sizeof(*result);
+}
+
+static void init_state_result_v11(rtklib_shared_state_result_t *result)
 {
     memset(result, 0, sizeof(*result));
     result->abi_version = RTKLIB_SHARED_ABI_VERSION;
@@ -181,6 +190,24 @@ static int check_modern_state(const rtklib_shared_nav_store_t *store,
         state.health != target->health || state.state_valid != 0 ||
         !all_state_numbers_nan(&state)) {
         fprintf(stderr, "FAIL: %s modern containment result lost fields\n",
+                target->label);
+        return 0;
+    }
+
+    /* ABI 1.1 (Issue #20 partial availability): the position/clock state
+     * is valid while the non-metric URAI accuracy is reported separately. */
+    init_state_result_v11(&state);
+    status = rtklib_shared_state_query(store, &query, &state);
+    if (status != RTKLIB_SHARED_OK ||
+        state.status != RTKLIB_SHARED_QUERY_AVAILABLE ||
+        state.state_valid != 1 ||
+        !isfinite(state.position_ecef_m[0]) ||
+        !isfinite(state.clock_bias_s) || !isnan(state.variance_m2) ||
+        state.variance_status != RTKLIB_SHARED_QUERY_UNSUPPORTED ||
+        !same_identity(&state.identity, identity) ||
+        state.health_raw != target->health_raw ||
+        state.health != target->health) {
+        fprintf(stderr, "FAIL: %s ABI 1.1 partial availability\n",
                 target->label);
         return 0;
     }
