@@ -14,6 +14,7 @@ int main(void)
     rtklib_shared_signal_result_t signal_result = {0};
     rtklib_shared_bias_result_t bias_result = {0};
     rtklib_shared_ion_result_t ion_result = {0};
+    rtklib_shared_modern_ura_result_t ura_result = {0};
     rtklib_shared_nav_store_t *store;
     rtklib_shared_record_id_t record_id = 0;
     rtklib_shared_time_t time = {0, 0.0};
@@ -63,6 +64,10 @@ int main(void)
                                      RTKLIB_SHARED_GLO_FCN_UNKNOWN, store,
                                      &signal_result);
     (void)rtklib_shared_bias_query(store, &state_query, &bias_result);
+    ura_result.abi_version = RTKLIB_SHARED_ABI_VERSION;
+    ura_result.struct_size = (uint32_t)sizeof(ura_result);
+    (void)rtklib_shared_modern_ura_query(store, &state_query, 0.5,
+                                         &ura_result);
     (void)rtklib_shared_ion_query(store, RTKLIB_SHARED_SYS_GPS,
                                   RTKLIB_SHARED_NAV_LNAV, time, 0,
                                   &ion_result);

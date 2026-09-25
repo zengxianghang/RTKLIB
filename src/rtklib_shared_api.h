@@ -15,9 +15,13 @@ extern "C" {
 #endif
 
 #define RTKLIB_SHARED_ABI_MAJOR 1u
-#define RTKLIB_SHARED_ABI_MINOR 0u
+#define RTKLIB_SHARED_ABI_MINOR 1u
 #define RTKLIB_SHARED_ABI_VERSION \
     ((RTKLIB_SHARED_ABI_MAJOR << 16) | RTKLIB_SHARED_ABI_MINOR)
+/* Every ABI 1.x POD keeps the 1.0 layout and size.  A caller may keep
+ * declaring 1.0 in abi_version; the library then preserves 1.0 semantics
+ * exactly (see rtklib_shared_state_result_t.variance_status). */
+#define RTKLIB_SHARED_ABI_VERSION_1_0 ((RTKLIB_SHARED_ABI_MAJOR << 16) | 0u)
 #define RTKLIB_SHARED_SOURCE_ID_MAX 128u
 #define RTKLIB_SHARED_SUBTYPE_MAX 5u
 #define RTKLIB_SHARED_GLO_FCN_UNKNOWN INT32_MIN
@@ -307,7 +311,21 @@ typedef struct {
     double clock_drift_sps;
     double variance_m2;
     rtklib_shared_record_identity_t identity;
-    uint8_t reserved[32];
+    /* ABI 1.1 (occupies the first four bytes of the 1.0 reserved area).
+     * For callers declaring abi_version >= 1.1 it is a query status for the
+     * scalar variance_m2 metric, independent of the state status:
+     *   AVAILABLE    variance_m2 is the broadcast metric SVA/URA variance;
+     *   UNSUPPORTED  the record's accuracy is not a scalar metric SVA
+     *                (GPS/QZSS CNAV/CNAV-2 URAI indices, BDS B-CNAV SISAI/
+     *                SISMAI indices); variance_m2 is NaN while the position
+     *                and clock state may still be valid.  GPS/QZSS CNAV
+     *                accuracy is available from rtklib_shared_modern_ura_query;
+     *   UNAVAILABLE  no state was evaluated.
+     * Callers declaring 1.0 see 1.0 behaviour: GPS/QZSS CNAV/CNAV-2 states
+     * stay UNSUPPORTED (Issue #20 Phase A containment), B-CNAV variance is
+     * the decoded scalar, and this field is left zero. */
+    int32_t variance_status;
+    uint8_t reserved[28];
 } rtklib_shared_state_result_t;
 
 typedef struct {
@@ -336,6 +354,34 @@ typedef struct {
     rtklib_shared_record_identity_t identity;
     uint8_t reserved[32];
 } rtklib_shared_bias_result_t;
+
+/* ABI 1.1: GPS/QZSS CNAV/CNAV-2 user range accuracy (IS-GPS-200N
+ * 30.3.3.1.1.4 and 30.3.3.2.4, IS-QZSS-PNT-006 5.4.3.2):
+ *   URA(t, E) = sqrt((URA_ED * sin(E + 90 deg))^2 + URA_NED(t)^2)
+ *   URA_NED(t) = URA_NED0 + URA_NED1 * dt [+ URA_NED2 * (dt - 93600)^2 if
+ *                dt > 93600 s], dt = t - t_op + 604800 * (WN - WN_op)
+ * with URA_ED and URA_NED0 the nominal values X of their indices (2^(1+N/2)
+ * for N <= 6, 2^(N-2) for N >= 6, N = 1/3/5 rounded to 2.8/5.7/11.3 m),
+ * URA_NED1 = 2^-(14+N1) m/s and URA_NED2 = 2^-(28+N2) m/s^2.  Status is
+ * UNAVAILABLE when an index signals no accuracy prediction (15 or -16) or
+ * t precedes t_op; UNSUPPORTED for any other family. */
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    int32_t status;
+    int32_t ura_ed_index;
+    int32_t ura_ned0_index;
+    int32_t ura_ned1_index;
+    int32_t ura_ned2_index;
+    double elapsed_since_top_s;   /* dt above, seconds */
+    double nominal_ura_ed_m;      /* X(URA_ED index), metres */
+    double adjusted_ura_ed_m;     /* nominal_ura_ed_m * sin(E + 90 deg) */
+    double ura_ned_m;             /* URA_NED(t), metres */
+    double ura_m;                 /* composite URA(t, E), metres */
+    double variance_m2;           /* ura_m^2 */
+    rtklib_shared_record_identity_t identity;
+    uint8_t reserved[32];
+} rtklib_shared_modern_ura_result_t;
 
 typedef struct {
     uint32_t abi_version;
@@ -394,6 +440,13 @@ int rtklib_shared_signal_query(uint32_t system, uint32_t prn,
 int rtklib_shared_bias_query(const rtklib_shared_nav_store_t *store,
                              const rtklib_shared_state_query_t *query,
                              rtklib_shared_bias_result_t *result);
+/* ABI 1.1.  query selects the record exactly as rtklib_shared_state_query
+ * (explicit selected_record_id or the default policy); query->evaluation_time
+ * is t and elevation_rad is the satellite elevation E in [0, pi/2]. */
+int rtklib_shared_modern_ura_query(const rtklib_shared_nav_store_t *store,
+                                   const rtklib_shared_state_query_t *query,
+                                   double elevation_rad,
+                                   rtklib_shared_modern_ura_result_t *result);
 int rtklib_shared_ion_query(const rtklib_shared_nav_store_t *store,
                             uint32_t system, uint32_t family_mask,
                             rtklib_shared_time_t evaluation_time,

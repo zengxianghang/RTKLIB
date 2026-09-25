@@ -52,6 +52,10 @@ int main()
                                      RTKLIB_SHARED_GLO_FCN_UNKNOWN, store,
                                      &signal);
     (void)rtklib_shared_bias_query(store, &query, &bias);
+    rtklib_shared_modern_ura_result_t ura{};
+    ura.abi_version = RTKLIB_SHARED_ABI_VERSION;
+    ura.struct_size = static_cast<uint32_t>(sizeof(ura));
+    (void)rtklib_shared_modern_ura_query(store, &query, 0.5, &ura);
     (void)rtklib_shared_ion_query(store, RTKLIB_SHARED_SYS_GPS,
                                   RTKLIB_SHARED_NAV_LNAV, time, 0,
                                   &ion_result);

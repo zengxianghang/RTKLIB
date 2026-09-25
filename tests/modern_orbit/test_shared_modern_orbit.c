@@ -6,8 +6,9 @@
  * - BDS B-CNAV1/2/3 (MEO/IGSO), BDS D1/D2 (including BDS-3 GEO C59-C63) and
  *   GPS/QZSS LNAV states published by rtklib_shared_state_query() match the
  *   independent specification oracle.
- * - GPS/QZSS CNAV/CNV2 stay contained by RTKLIB #20 Phase A (UNSUPPORTED,
- *   identity preserved) until the modern URAI contract lands.
+ * - GPS/QZSS CNAV/CNV2: ABI 1.1 callers get the oracle state with an
+ *   UNSUPPORTED variance metric; ABI 1.0 callers keep the #20 Phase A
+ *   containment (UNSUPPORTED, identity preserved).
  * - A receiver-injected B-CNAV record carries Adot/ndot through the public
  *   input and reproduces the RINEX-loaded state bit-for-bit.
  * - B-CNAV records of BDS GEO satellites are contained (no real evidence).
@@ -88,9 +89,10 @@ static int code_for(uint32_t system, uint32_t prn, const char *signal,
     return 1;
 }
 
-static int query(const rtklib_shared_nav_store_t *store,
-                 const rtklib_shared_record_identity_t *id,
-                 rtklib_shared_time_t t, rtklib_shared_state_result_t *out)
+static int query_as(const rtklib_shared_nav_store_t *store,
+                    const rtklib_shared_record_identity_t *id,
+                    rtklib_shared_time_t t, uint32_t abi_version,
+                    rtklib_shared_state_result_t *out)
 {
     rtklib_shared_state_query_t q;
     memset(&q, 0, sizeof(q));
@@ -105,9 +107,16 @@ static int query(const rtklib_shared_nav_store_t *store,
     q.selected_record_id = id->record_id;
     if (!code_for(id->system, id->prn, family_signal(id->system, id->family),
                   &q.rtklib_code)) return RTKLIB_SHARED_INVALID_ARGUMENT;
-    out->abi_version = RTKLIB_SHARED_ABI_VERSION;
+    out->abi_version = abi_version;
     out->struct_size = (uint32_t)sizeof(*out);
     return rtklib_shared_state_query(store, &q, out);
+}
+
+static int query(const rtklib_shared_nav_store_t *store,
+                 const rtklib_shared_record_identity_t *id,
+                 rtklib_shared_time_t t, rtklib_shared_state_result_t *out)
+{
+    return query_as(store, id, t, RTKLIB_SHARED_ABI_VERSION, out);
 }
 
 static const rtklib_shared_record_identity_t *find_record(
@@ -158,20 +167,29 @@ static int check_oracle(const rtklib_shared_nav_store_t *store,
         }
         t.week = t_week;
         t.sow = t_sow;
-        stat = query(store, id, t, &r);
         if ((system == RTKLIB_SHARED_SYS_GPS ||
              system == RTKLIB_SHARED_SYS_QZS) &&
             (fam == RTKLIB_SHARED_NAV_CNAV || fam == RTKLIB_SHARED_NAV_CNV2)) {
+            stat = query_as(store, id, t, RTKLIB_SHARED_ABI_VERSION_1_0, &r);
             if (stat != RTKLIB_SHARED_UNSUPPORTED ||
                 r.status != RTKLIB_SHARED_QUERY_UNSUPPORTED ||
                 r.identity.record_id != id->record_id) {
                 snprintf(detail, sizeof(detail),
-                         "%s %s not contained (stat=%d status=%d)", sat,
-                         family, stat, r.status);
+                         "%s %s not contained for ABI 1.0 (stat=%d)", sat,
+                         family, stat);
                 fail("containment", detail);
             }
             contained++;
-            continue;
+        }
+        stat = query(store, id, t, &r);
+        if (stat == RTKLIB_SHARED_OK &&
+            (fam == RTKLIB_SHARED_NAV_CNAV || fam == RTKLIB_SHARED_NAV_CNV1 ||
+             fam == RTKLIB_SHARED_NAV_CNV2 || fam == RTKLIB_SHARED_NAV_CNV3) &&
+            (r.variance_status != RTKLIB_SHARED_QUERY_UNSUPPORTED ||
+             !isnan(r.variance_m2))) {
+            snprintf(detail, sizeof(detail), "%s %s variance published", sat,
+                     family);
+            fail("variance", detail);
         }
         if (stat != RTKLIB_SHARED_OK || !r.state_valid ||
             fabs(r.position_ecef_m[0] - x[0]) > ORACLE_POS_TOL_M ||
@@ -188,8 +206,9 @@ static int check_oracle(const rtklib_shared_nav_store_t *store,
         if (system == RTKLIB_SHARED_SYS_BDS && prn >= 59) geo++;
     }
     fclose(fp);
-    printf("public oracle: %d available states match (%d BDS-3 GEO D2), "
-           "%d GPS/QZSS CNAV/CNV2 contained\n", available, geo, contained);
+    printf("public oracle: %d ABI 1.1 states match (%d BDS-3 GEO D2); "
+           "%d GPS/QZSS CNAV/CNV2 contained for ABI 1.0 callers\n",
+           available, geo, contained);
     return available > 0 && geo > 0 && contained > 0;
 }
 

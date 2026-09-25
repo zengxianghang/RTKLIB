@@ -389,6 +389,62 @@ static int find_transition(const rtklib_shared_record_identity_t *identities,
     return 0;
 }
 
+/* ABI 1.1: modern records whose accuracy is not a scalar metric SVA
+ * publish their state with variance_status UNSUPPORTED (Issue #20); every
+ * other record reports its unchanged variance as AVAILABLE. */
+static int check_state_v11(const rtklib_shared_nav_store_t *store,
+                           const rtklib_shared_state_query_t *query,
+                           const rtklib_shared_record_identity_t *identity,
+                           const eph_t *expected_eph,
+                           const geph_t *expected_geph)
+{
+    rtklib_shared_state_result_t result;
+    double rs[6] = {0}, dts[2] = {0}, variance = 0.0;
+    int modern_gq, bcnav, geo, stat;
+
+    modern_gq = (identity->system == RTKLIB_SHARED_SYS_GPS ||
+                 identity->system == RTKLIB_SHARED_SYS_QZS) &&
+                (identity->family == RTKLIB_SHARED_NAV_CNAV ||
+                 identity->family == RTKLIB_SHARED_NAV_CNV2);
+    bcnav = identity->system == RTKLIB_SHARED_SYS_BDS &&
+            (identity->family == RTKLIB_SHARED_NAV_CNV1 ||
+             identity->family == RTKLIB_SHARED_NAV_CNV2 ||
+             identity->family == RTKLIB_SHARED_NAV_CNV3);
+    geo = bcnav && (identity->prn <= 5 || identity->prn >= 59);
+    init_state_result(&result);
+    stat = rtklib_shared_state_query(store, query, &result);
+    if (geo) {
+        CHECK(stat == RTKLIB_SHARED_UNSUPPORTED && !result.state_valid,
+              "BDS GEO B-CNAV state was published");
+        return 0;
+    }
+    CHECK(stat == RTKLIB_SHARED_OK &&
+          result.status == RTKLIB_SHARED_QUERY_AVAILABLE &&
+          result.state_valid && result.abi_version ==
+          RTKLIB_SHARED_ABI_VERSION,
+          "ABI 1.1 state is unavailable");
+    CHECK(result.identity.record_id == identity->record_id,
+          "ABI 1.1 state lost selected identity");
+    if (expected_eph) eph2pos(expected_eph->toe, expected_eph, rs, dts,
+                              &variance);
+    else geph2pos(expected_geph->toe, expected_geph, rs, dts, &variance);
+    CHECK(fabs(result.position_ecef_m[0] - rs[0]) < 1E-2 &&
+          fabs(result.position_ecef_m[1] - rs[1]) < 1E-2 &&
+          fabs(result.position_ecef_m[2] - rs[2]) < 1E-2,
+          "ABI 1.1 state differs from private RTKLIB propagation");
+    if (modern_gq || bcnav) {
+        CHECK(result.variance_status == RTKLIB_SHARED_QUERY_UNSUPPORTED &&
+              isnan(result.variance_m2),
+              "modern accuracy index was published as a metric variance");
+    }
+    else {
+        CHECK(result.variance_status == RTKLIB_SHARED_QUERY_AVAILABLE &&
+              result.variance_m2 == variance,
+              "legacy metric variance changed under ABI 1.1");
+    }
+    return 0;
+}
+
 static int check_state(const rtklib_shared_nav_store_t *store,
                        const rtklib_shared_record_identity_t *identity,
                        unsigned char code,
@@ -403,8 +459,16 @@ static int check_state(const rtklib_shared_nav_store_t *store,
     init_state_query(&query, identity->system, identity->prn,
                      identity->family, code, identity->toe,
                      identity->record_id);
+    CHECK(check_state_v11(store, &query, identity, expected_eph,
+                          expected_geph) == 0,
+          "ABI 1.1 state/variance split failed");
+    /* The checks below pin the unchanged ABI 1.0 semantics. */
     init_state_result(&result);
+    result.abi_version = RTKLIB_SHARED_ABI_VERSION_1_0;
     stat = rtklib_shared_state_query(store, &query, &result);
+    CHECK(result.abi_version == RTKLIB_SHARED_ABI_VERSION_1_0 &&
+          result.variance_status == 0,
+          "ABI 1.0 caller saw an ABI 1.1 result field");
     if ((identity->system == RTKLIB_SHARED_SYS_GPS ||
          identity->system == RTKLIB_SHARED_SYS_QZS) &&
         (identity->family == RTKLIB_SHARED_NAV_CNAV ||
@@ -459,9 +523,10 @@ static int check_state(const rtklib_shared_nav_store_t *store,
         return fail_at(__FILE__, __LINE__,
                        "selected state differs from private RTKLIB propagation");
     }
-    /* The real C19 CNV2 record in this fixture stores SVA as 15 metres
-     * (URA2URAI=0).  Its public state variance must therefore be 15^2 m^2;
-     * treating that metric value as an index reaches ura_value[15]. */
+    /* ABI 1.0 compatibility: the decoded C19 CNV2 accuracy scalar (15)
+     * is squared as metres, exactly as before.  ABI 1.1 callers instead get
+     * variance_status UNSUPPORTED because B-CNAV accuracy fields are
+     * SISAI/SISMAI indices (check_state_v11). */
     if (identity->system == RTKLIB_SHARED_SYS_BDS &&
         identity->prn == 19 && identity->family == RTKLIB_SHARED_NAV_CNV2 &&
         expected_eph && expected_eph->sva == 15.0) {
