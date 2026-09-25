@@ -1970,6 +1970,39 @@ int rtklib_shared_tropo(const rtklib_shared_nav_store_t *store,
     return RTKLIB_SHARED_OK;
 }
 
+int rtklib_shared_tropo_saastamoinen(rtklib_shared_time_t time,
+                                     const double receiver_llh_rad_m[3],
+                                     const double azel_rad[2],
+                                     double relative_humidity,
+                                     double *delay_m)
+{
+    if (!delay_m || !valid_shared_time(time) || !receiver_llh_rad_m ||
+        !azel_rad || !valid_vector(receiver_llh_rad_m, 3) ||
+        !valid_vector(azel_rad, 2) || !finite_value(relative_humidity) ||
+        relative_humidity < 0.0 || relative_humidity > 1.0)
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    *delay_m = tropmodel(to_gtime(time), receiver_llh_rad_m, azel_rad,
+                         relative_humidity);
+    return finite_value(*delay_m) ? RTKLIB_SHARED_OK :
+        RTKLIB_SHARED_CALL_FAILED;
+}
+
+int rtklib_shared_klobuchar(rtklib_shared_time_t time,
+                            const double coefficients[8],
+                            const double receiver_llh_rad_m[3],
+                            const double azel_rad[2], double *delay_m)
+{
+    if (!delay_m || !valid_shared_time(time) || !coefficients ||
+        !valid_vector(coefficients, 8) || !receiver_llh_rad_m || !azel_rad ||
+        !valid_vector(receiver_llh_rad_m, 3) || !valid_vector(azel_rad, 2))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    if (norm(coefficients, 8) <= 0.0) return RTKLIB_SHARED_UNAVAILABLE;
+    *delay_m = ionmodel(to_gtime(time), coefficients, receiver_llh_rad_m,
+                        azel_rad);
+    return finite_value(*delay_m) ? RTKLIB_SHARED_OK :
+        RTKLIB_SHARED_CALL_FAILED;
+}
+
 int rtklib_shared_satellite_number(uint32_t system, uint32_t prn,
                                    uint32_t *satellite_number)
 {
