@@ -2582,6 +2582,80 @@ static int add_seph(nav_t *nav, const seph_t *seph)
     nav->seph[nav->ns++]=*seph;
     return 1;
 }
+/* RINEX 4 ION records to the per-system model arrays (issue #34) -----------
+* RINEX 4 carries the broadcast ionosphere parameters as "> ION" records
+* instead of IONOSPHERIC CORR header lines.  Every record stays in nav->ion[];
+* this fills ion_gps/ion_qzs/ion_cmp/ion_gal, which ionocorr()/ionmodel()
+* evaluate, from the records read from one file.
+*
+* - An array that is already set (a RINEX 2/3 header or an earlier file) is
+*   never overwritten.
+* - GPS: LNAV Klobuchar, else CNVX (same 8-parameter model).
+* - QZSS: LNAV then CNVX; the JAPN subtype before WIDE, as the L1C/A set.
+* - BDS: D1D2 Klobuchar only; CNVX carries BDGIM, a different model.
+* - Galileo: IFNV NeQuick-G ai0,ai1,ai2 and the fourth (flags) field.
+* - Among candidates the earliest transmission time wins, file order breaks
+*   ties, matching a header set valid at the start of the file.
+*-----------------------------------------------------------------------------*/
+static int ion_record_complete(const ion_t *ion, int count)
+{
+    int i;
+    if (ion->ndata<count) return 0;
+    for (i=0;i<count;i++) {
+        if (!ion->present[i]) return 0;
+    }
+    return 1;
+}
+static int ion_array_set(const double *values, int count)
+{
+    int i;
+    for (i=0;i<count;i++) if (values[i]!=0.0) return 1;
+    return 0;
+}
+static const ion_t *select_ion_record(const nav_t *nav, int first, int sys,
+                                      int msg_type, const char *subtype,
+                                      int count)
+{
+    const ion_t *best=NULL;
+    int i;
+    for (i=first;i<nav->nion;i++) {
+        const ion_t *ion=nav->ion+i;
+        if (ion->hdr.sys!=sys||ion->hdr.msg_type!=msg_type) continue;
+        if (subtype&&strcmp(ion->hdr.subtype,subtype)) continue;
+        if (!ion_record_complete(ion,count)) continue;
+        if (!best||timediff(ion->trans_time,best->trans_time)<0.0) best=ion;
+    }
+    return best;
+}
+static void set_ion_array(double *values, int count, const ion_t *ion)
+{
+    int i;
+    if (!ion||ion_array_set(values,count)) return;
+    for (i=0;i<count;i++) values[i]=ion->data[i];
+}
+static void ion_records_to_models(nav_t *nav, int first)
+{
+    static const int qzs_types[]={NAV_LNAV,NAV_CNVX};
+    static const char *qzs_regions[]={"JAPN","WIDE"};
+    const ion_t *ion;
+    int i,j;
+    
+    if (!(ion=select_ion_record(nav,first,SYS_GPS,NAV_LNAV,NULL,8))) {
+        ion=select_ion_record(nav,first,SYS_GPS,NAV_CNVX,NULL,8);
+    }
+    set_ion_array(nav->ion_gps,8,ion);
+    
+    for (ion=NULL,i=0;i<2&&!ion;i++) {
+        for (j=0;j<2&&!ion;j++) {
+            ion=select_ion_record(nav,first,SYS_QZS,qzs_types[i],qzs_regions[j],8);
+        }
+        if (!ion) ion=select_ion_record(nav,first,SYS_QZS,qzs_types[i],"",8);
+    }
+    set_ion_array(nav->ion_qzs,8,ion);
+    
+    set_ion_array(nav->ion_cmp,8,select_ion_record(nav,first,SYS_CMP,NAV_D1D2,NULL,8));
+    set_ion_array(nav->ion_gal,4,select_ion_record(nav,first,SYS_GAL,NAV_IFNV,NULL,4));
+}
 /* read rinex nav/gnav/geo nav -----------------------------------------------*/
 static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
                       nav_t *nav)
@@ -2599,6 +2673,7 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
     if (!nav) return 0;
     
     if (ver >= 4) {
+        const int first_ion=nav->nion;
         /* read rinex navigation data body */
         while ((stat=readrnx4navb(fp,opt,ver,sys,&type,&eph,&geph,&seph, &sto, &eop, &ion))>=0) {
             
@@ -2615,6 +2690,7 @@ static int readrnxnav(FILE *fp, const char *opt, double ver, int sys,
                 if (!stat) return 0;
             }
         }
+        ion_records_to_models(nav,first_ion);
         return nav->n>0||nav->ng>0||nav->ns>0||nav->nion>0||nav->neop>0||nav->nsto>0;
     } else {
         /* read rinex navigation data body */
