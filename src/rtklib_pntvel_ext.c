@@ -1,4 +1,5 @@
 #include "rtklib_pntvel_ext.h"
+#include "rtklib_residual_ext.h"
 
 #define PNTVEL_MAXITR 10
 
@@ -11,7 +12,7 @@ static int velocity_residuals(const obsd_t *obs,
                               const int *vsat, double *residual,
                               double *design)
 {
-    double pos[3],E[9],a[3],e[3],relative_velocity[3],cosel,lambda,rate;
+    double pos[3],E[9],a[3],e[3],cosel,lambda,rate;
     int i,j,nv=0;
 
     ecef2pos(receiver_ecef_m,pos);
@@ -29,10 +30,7 @@ static int velocity_residuals(const obsd_t *obs,
         a[2]=sin(azel[1+i*2]);
         matmul("TN",3,1,3,1.0,E,a,0.0,e);
 
-        for (j=0;j<3;j++) relative_velocity[j]=rs[j+3+i*6]-state[j];
-        rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
-             rs[4+i*6]*receiver_ecef_m[0]+rs[1+i*6]*state[0]-
-             rs[3+i*6]*receiver_ecef_m[1]-rs[i*6]*state[1]);
+        rate=rtklib_range_rate_ext(rs+i*6,receiver_ecef_m,state,e);
 
         residual[nv]=-lambda*obs[i].D[0]-
                      (rate+state[3]-CLIGHT*dts[1+i*2]);

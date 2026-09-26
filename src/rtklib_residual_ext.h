@@ -53,12 +53,31 @@ int rtklib_rescode_state_ext(
     double azel_rad[2]);
 
 /*
- * Evaluate one signal with the RTKLIB resdop equation at a fixed receiver
- * state. obs->D[0] is Doppler in Hz and wavelength_m is the actual signal
- * wavelength, including GLONASS FCN dependence where applicable. A nonzero
- * message mask constrains satellite-state selection to a NAV family compatible
- * with obs->code[0]. A zero mask selects the nearest generic broadcast state,
- * allowing Doppler validation when signal-specific code-bias NAV is absent.
+ * Rate of the geodist() range rho(t)=geodist(rs(t-rho/c),rr(t)), including the
+ * light-time dependence of the transmit epoch. satellite_state_ecef is the
+ * transmit-time position/velocity {x,y,z,vx,vy,vz}; los is the geodist() unit
+ * vector from receiver to satellite. With A the satellite-motion and B the
+ * receiver-motion term of d(geodist):
+ *
+ *   rate = (A+B)/(1+A/c)
+ *
+ * Stock pntpos.c/resdop() keeps A+B with the opposite sign of the Sagnac-rate
+ * terms, a first-order model that differs by up to ~1 cm/s from the rate of
+ * the range it pairs with.
+ */
+double rtklib_range_rate_ext(const double satellite_state_ecef[6],
+                             const double receiver_ecef_m[3],
+                             const double receiver_velocity_ecef_mps[3],
+                             const double los[3]);
+
+/*
+ * Evaluate one signal with the rtklib_range_rate_ext() Doppler equation at a
+ * fixed receiver state. obs->D[0] is Doppler in Hz and wavelength_m is the
+ * actual signal wavelength, including GLONASS FCN dependence where
+ * applicable. A nonzero message mask constrains satellite-state selection to a
+ * NAV family compatible with obs->code[0]. A zero mask selects the nearest
+ * generic broadcast state, allowing Doppler validation when signal-specific
+ * code-bias NAV is absent.
  */
 int rtklib_resdop_signal_ext(const obsd_t *obs, const nav_t *nav,
                              const prcopt_t *opt,

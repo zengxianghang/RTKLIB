@@ -10,7 +10,8 @@ extern "C" {
 /* Standalone single-point velocity estimate from Doppler.
  *
  * `receiver_ecef_m` is a position hint used only to form line-of-sight vectors
- * and apply the same Earth-rotation term as pntpos.c/resdop(). A current
+ * for the rtklib_range_rate_ext() range-rate model (light-time-consistent
+ * geodist() rate, not the first-order pntpos.c/resdop() term). A current
  * pseudorange position fix is not required.
  *
  * `doppler_valid` and `wavelength_m` contain one value per observation.
@@ -22,8 +23,8 @@ extern "C" {
  * Each observation must still carry a nonzero P[0] so RTKLIB satposs() can
  * derive signal transmission time from Receiver NAV.
  *
- * `receiver_clock_drift_mps` is returned in range-rate units (m/s), matching
- * the fourth state of pntpos.c/resdop().
+ * `receiver_clock_drift_mps` is returned in range-rate units (m/s), like the
+ * fourth state of pntpos.c/resdop().
  */
 int rtklib_pntvel_ext(const obsd_t *obs, const unsigned char *doppler_valid,
                       const double *wavelength_m, int n, const nav_t *nav,
