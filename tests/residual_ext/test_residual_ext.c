@@ -1,5 +1,6 @@
 #include "rtklib.h"
 #include "rtklib_residual_ext.h"
+#include "range_rate_reference.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -46,7 +47,7 @@ int main(void)
     gtime_t t=gpst2time(2300,100000.0);
     double rr[3],pos[3]={20.0*D2R,120.0*D2R,100.0};
     double rs[6],dts[2],var,bias=0.0,residual=0.0,azel[2];
-    double e[3],range,relative_velocity[3],rate,wavelength=CLIGHT/FREQ2;
+    double e[3],range,rate,wavelength=CLIGHT/FREQ2;
     double zero_velocity[3]={0};
     int sat=satno(SYS_GPS,3),svh=0,stat,i;
 
@@ -128,9 +129,7 @@ int main(void)
     if (stat!=1||svh!=0) return fail_stage("L2C Doppler state");
     range=geodist(rs,rr,e);
     if (!(range>0.0)) return fail_stage("L2C Doppler range");
-    for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
-    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
-         rs[4]*rr[0]-rs[3]*rr[1]);
+    rate=reference_range_rate(rs,rr,zero_velocity,e);
     obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
 
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
@@ -170,9 +169,7 @@ int main(void)
     if (stat!=1||svh!=1) return fail_stage("L5Q Doppler state");
     range=geodist(rs,rr,e);
     if (!(range>0.0)) return fail_stage("L5Q Doppler range");
-    for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
-    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
-         rs[4]*rr[0]-rs[3]*rr[1]);
+    rate=reference_range_rate(rs,rr,zero_velocity,e);
     obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
                                   NAV_CNAV,wavelength,&residual,azel);
@@ -219,9 +216,7 @@ int main(void)
     if (stat!=1||svh!=0) return fail_stage("generic L1C Doppler state");
     range=geodist(rs,rr,e);
     if (!(range>0.0)) return fail_stage("generic L1C Doppler range");
-    for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
-    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
-         rs[4]*rr[0]-rs[3]*rr[1]);
+    rate=reference_range_rate(rs,rr,zero_velocity,e);
     obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,
                                   0,wavelength,&residual,azel);

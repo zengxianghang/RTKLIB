@@ -124,6 +124,25 @@ int rtklib_rescode_state_ext(
     return isfinite(*residual_m)?1:-1;
 }
 
+double rtklib_range_rate_ext(const double satellite_state_ecef[6],
+                             const double receiver_ecef_m[3],
+                             const double receiver_velocity_ecef_mps[3],
+                             const double los[3])
+{
+    const double *rs=satellite_state_ecef,*rr=receiver_ecef_m;
+    const double *vr=receiver_velocity_ecef_mps;
+    double satellite_term=0.0,receiver_term=0.0;
+    int i;
+
+    for (i=0;i<3;i++) {
+        satellite_term+=rs[i+3]*los[i];
+        receiver_term-=vr[i]*los[i];
+    }
+    satellite_term+=OMGE/CLIGHT*(rs[3]*rr[1]-rs[4]*rr[0]);
+    receiver_term+=OMGE/CLIGHT*(rs[0]*vr[1]-rs[1]*vr[0]);
+    return (satellite_term+receiver_term)/(1.0+satellite_term/CLIGHT);
+}
+
 static int resdop_signal_ext_impl(
     const obsd_t *obs, const nav_t *nav, const prcopt_t *opt,
     const double receiver_ecef_m[3],
@@ -133,8 +152,8 @@ static int resdop_signal_ext_impl(
     double azel_rad[2])
 {
     double rs[6]={0},dts[2]={0},vare=0.0,e[3],pos[3],azel[2];
-    double relative_velocity[3],rate,r;
-    int svh=0,j,stat;
+    double rate,r;
+    int svh=0,stat;
 
     if (!obs||!nav||!opt||!receiver_ecef_m||!receiver_velocity_ecef_mps||
         !residual_mps||!isfinite(wavelength_m)||wavelength_m<=0.0||
@@ -177,12 +196,7 @@ static int resdop_signal_ext_impl(
         satexclude(obs->sat,ignore_broadcast_health?0:svh,opt)) return 0;
     if (norm(rs+3,3)<=0.0) return 0;
 
-    for (j=0;j<3;j++) {
-        relative_velocity[j]=rs[j+3]-receiver_velocity_ecef_mps[j];
-    }
-    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
-         rs[4]*receiver_ecef_m[0]+rs[1]*receiver_velocity_ecef_mps[0]-
-         rs[3]*receiver_ecef_m[1]-rs[0]*receiver_velocity_ecef_mps[1]);
+    rate=rtklib_range_rate_ext(rs,receiver_ecef_m,receiver_velocity_ecef_mps,e);
 
     *residual_mps=-wavelength_m*obs->D[0]-
                   (rate+receiver_clock_drift_mps-CLIGHT*dts[1]);
@@ -230,7 +244,7 @@ int rtklib_resdop_state_ext(
     const double satellite_clock[2], int satellite_health,
     double wavelength_m, double *residual_mps, double azel_rad[2])
 {
-    double e[3],pos[3],azel[2],relative_velocity[3],rate,r;
+    double e[3],pos[3],azel[2],rate,r;
     int i;
 
     if (!obs||!opt||!receiver_ecef_m||!receiver_velocity_ecef_mps||
@@ -253,15 +267,8 @@ int rtklib_resdop_state_ext(
         satexclude(obs->sat,satellite_health,opt)) return 0;
     if (norm(satellite_state_ecef+3,3)<=0.0) return 0;
 
-    for (i=0;i<3;i++) {
-        relative_velocity[i]=satellite_state_ecef[i+3]-
-                             receiver_velocity_ecef_mps[i];
-    }
-    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
-         satellite_state_ecef[4]*receiver_ecef_m[0]+
-         satellite_state_ecef[1]*receiver_velocity_ecef_mps[0]-
-         satellite_state_ecef[3]*receiver_ecef_m[1]-
-         satellite_state_ecef[0]*receiver_velocity_ecef_mps[1]);
+    rate=rtklib_range_rate_ext(satellite_state_ecef,receiver_ecef_m,
+                               receiver_velocity_ecef_mps,e);
 
     *residual_mps=-wavelength_m*obs->D[0]-
                   (rate+receiver_clock_drift_mps-CLIGHT*satellite_clock[1]);

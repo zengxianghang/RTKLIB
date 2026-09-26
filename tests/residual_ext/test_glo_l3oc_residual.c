@@ -1,5 +1,6 @@
 #include "rtklib.h"
 #include "rtklib_residual_ext.h"
+#include "range_rate_reference.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -23,7 +24,7 @@ int main(void)
     gtime_t t=gpst2time(2300,100000.0);
     double rr[3],pos[3]={20.0*D2R,120.0*D2R,100.0};
     double rs[6],dts[2],var,bias,residual,azel[2],e[3],range;
-    double relative_velocity[3],rate,wavelength=CLIGHT/FREQ3_GLO;
+    double rate,wavelength=CLIGHT/FREQ3_GLO;
     double zero_velocity[3]={0};
     double dt=100.0,expected_clk;
     int sat=satno(SYS_GLO,1),svh=0,stat,i;
@@ -83,9 +84,7 @@ int main(void)
     if (stat!=1) return 1;
     range=geodist(rs,rr,e);
     if (!(range>0.0)) return 1;
-    for (i=0;i<3;i++) relative_velocity[i]=rs[i+3];
-    rate=dot(relative_velocity,e,3)+OMGE/CLIGHT*(
-         rs[4]*rr[0]-rs[3]*rr[1]);
+    rate=reference_range_rate(rs,rr,zero_velocity,e);
     obs.D[0]=(float)(-(rate-CLIGHT*dts[1])/wavelength);
 
     stat=rtklib_resdop_signal_ext(&obs,&nav,&opt,rr,zero_velocity,0.0,

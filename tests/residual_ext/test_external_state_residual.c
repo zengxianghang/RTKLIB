@@ -1,5 +1,6 @@
 #include "rtklib.h"
 #include "rtklib_residual_ext.h"
+#include "range_rate_reference.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -21,7 +22,7 @@ int main(void)
     double receiver_pos[3]={20.0*D2R,120.0*D2R,100.0};
     double receiver_ecef[3],receiver_velocity[3]={10.0,-4.0,1.0};
     double satellite_state[6],satellite_clock[2]={3E-6,-2E-10};
-    double relative_velocity[3],los[3],range,rate,residual,azel[2];
+    double los[3],range,rate,residual,azel[2];
     double receiver_clock_bias_m=15.0,receiver_system_bias_m=-2.0;
     double receiver_clock_drift_mps=0.25,code_bias_m=-0.4;
     double wavelength=CLIGHT/FREQ6;
@@ -62,14 +63,7 @@ int main(void)
     if (stat!=1||!expect_close("external-state code bias sign",residual,1.25,1E-8)) return 1;
     obs.P[0]-=1.25;
 
-    for (i=0;i<3;i++) {
-        relative_velocity[i]=satellite_state[i+3]-receiver_velocity[i];
-    }
-    rate=dot(relative_velocity,los,3)+OMGE/CLIGHT*(
-         satellite_state[4]*receiver_ecef[0]+
-         satellite_state[1]*receiver_velocity[0]-
-         satellite_state[3]*receiver_ecef[1]-
-         satellite_state[0]*receiver_velocity[1]);
+    rate=reference_range_rate(satellite_state,receiver_ecef,receiver_velocity,los);
     obs.D[0]=(float)(-(rate+receiver_clock_drift_mps-
                        CLIGHT*satellite_clock[1])/wavelength);
 
