@@ -4098,13 +4098,23 @@ static int eph_supports_code(int sys, int type, unsigned char code)
     return 0;
 }
 
+/* The selection loops below visit nav->eph/nav->geph entries in ascending
+ * index order.  A non-NULL candidates array (ascending indices, e.g. one
+ * satellite's entries) restricts the visit to those entries; every entry of
+ * another satellite is rejected by the first test of each loop anyway, so the
+ * result and tie-breaking are identical to the full scan. */
+#define SELECT_LOOP_COUNT(candidates,ncandidates,n) \
+    ((candidates)?(ncandidates):(n))
+#define SELECT_LOOP_INDEX(candidates,k) ((candidates)?(candidates)[k]:(k))
+
 static const eph_t *select_generic_eph(gtime_t time, int sat,
                                        const nav_t *nav,
                                        const unsigned char *allow_eph,
+                                       const int *candidates, int ncandidates,
                                        int *message_type)
 {
     double age,tmax,tmin;
-    int i,j=-1,sys;
+    int i,j=-1,k,sys;
 
     if (!nav||(sys=satsys(sat,NULL))==SYS_NONE) return NULL;
 
@@ -4112,7 +4122,9 @@ static const eph_t *select_generic_eph(gtime_t time, int sat,
        state must use the same broadcast record as the simulator/stock satpos. */
     tmax=max_eph_age_sec(sys)+1.0;
     tmin=tmax+1.0;
-    for (i=0;i<nav->n;i++) {
+    for (k=0;k<SELECT_LOOP_COUNT(candidates,ncandidates,nav->n);k++) {
+        i=SELECT_LOOP_INDEX(candidates,k);
+        if (i<0||i>=nav->n) continue;
         if (allow_eph && !allow_eph[i]) continue;
         if (nav->eph[i].sat!=sat) continue;
         if ((age=fabs(timediff(nav->eph[i].toe,time)))>tmax) continue;
@@ -4130,17 +4142,20 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
                                       int required_message_mask,
                                       const nav_t *nav,
                                       const unsigned char *allow_eph,
+                                      const int *candidates, int ncandidates,
                                       int *message_type)
 {
     const eph_t *best=NULL;
     double best_age=0.0,max_age;
-    int i,sys,type;
+    int i,k,sys,type;
 
     if (!nav||(sys=satsys(sat,NULL))==SYS_NONE) return NULL;
     max_age=max_eph_age_sec(sys);
 
-    for (i=0;i<nav->n;i++) {
+    for (k=0;k<SELECT_LOOP_COUNT(candidates,ncandidates,nav->n);k++) {
         double age;
+        i=SELECT_LOOP_INDEX(candidates,k);
+        if (i<0||i>=nav->n) continue;
         if (allow_eph && !allow_eph[i]) continue;
         if (nav->eph[i].sat!=sat) continue;
         type=canonical_message_type(nav->eph+i,sys);
@@ -4163,14 +4178,17 @@ static const geph_t *select_signal_geph(gtime_t time, int sat,
                                         int required_message_mask,
                                         const nav_t *nav, int required_fcn,
                                         const unsigned char *allow_geph,
+                                        const int *candidates, int ncandidates,
                                         int *message_type)
 {
     const geph_t *best=NULL;
     double best_age=0.0;
-    int i,type;
+    int i,k,type;
     if (!nav) return NULL;
-    for (i=0;i<nav->ng;i++) {
+    for (k=0;k<SELECT_LOOP_COUNT(candidates,ncandidates,nav->ng);k++) {
         double age;
+        i=SELECT_LOOP_INDEX(candidates,k);
+        if (i<0||i>=nav->ng) continue;
         if (allow_geph && !allow_geph[i]) continue;
         if (nav->geph[i].sat!=sat) continue;
         type=nav->geph[i].hdr.msg_type?nav->geph[i].hdr.msg_type:NAV_FDMA;
@@ -4217,15 +4235,15 @@ int rtklib_signal_family_mask_ext(int system, unsigned char code)
     return mask;
 }
 
-int rtklib_signal_select_record_filtered_ext(
+static int select_record_impl(
     gtime_t time, int sat, unsigned char code, int required_message_mask,
     int required_fcn, const nav_t *nav, const unsigned char *allow_eph,
-    const unsigned char *allow_geph, int *eph_index, int *geph_index,
-    int *message_type)
+    const unsigned char *allow_geph, const int *candidates, int ncandidates,
+    int *eph_index, int *geph_index, int *message_type)
 {
     const eph_t *eph=NULL;
     const geph_t *geph=NULL;
-    int sys,i,type=0;
+    int sys,type=0;
 
     if (eph_index) *eph_index=-1;
     if (geph_index) *geph_index=-1;
@@ -4234,28 +4252,50 @@ int rtklib_signal_select_record_filtered_ext(
         sat<=0 || sat>MAXSAT || code==CODE_NONE) return -1;
     sys=satsys(sat,NULL);
     if (sys==SYS_NONE) return -1;
+    /* The selected pointer is an element of nav->geph/nav->eph, so its index
+     * is the pointer offset (formerly found by a scan of the whole array). */
     if (sys==SYS_GLO) {
         geph=select_signal_geph(time,sat,code,required_message_mask,nav,
-                                required_fcn,allow_geph,&type);
+                                required_fcn,allow_geph,candidates,
+                                ncandidates,&type);
         if (!geph) return 0;
-        for (i=0;i<nav->ng;i++) if (nav->geph+i==geph) {
-            *geph_index=i;
-            *message_type=type;
-            return 1;
-        }
-    } else {
-        eph=required_message_mask ?
-            select_signal_eph(time,sat,code,required_message_mask,nav,
-                              allow_eph,&type) :
-            select_generic_eph(time,sat,nav,allow_eph,&type);
-        if (!eph) return 0;
-        for (i=0;i<nav->n;i++) if (nav->eph+i==eph) {
-            *eph_index=i;
-            *message_type=type;
-            return 1;
-        }
+        *geph_index=(int)(geph-nav->geph);
+        *message_type=type;
+        return 1;
     }
-    return -1;
+    eph=required_message_mask ?
+        select_signal_eph(time,sat,code,required_message_mask,nav,
+                          allow_eph,candidates,ncandidates,&type) :
+        select_generic_eph(time,sat,nav,allow_eph,candidates,ncandidates,
+                           &type);
+    if (!eph) return 0;
+    *eph_index=(int)(eph-nav->eph);
+    *message_type=type;
+    return 1;
+}
+
+int rtklib_signal_select_record_filtered_ext(
+    gtime_t time, int sat, unsigned char code, int required_message_mask,
+    int required_fcn, const nav_t *nav, const unsigned char *allow_eph,
+    const unsigned char *allow_geph, int *eph_index, int *geph_index,
+    int *message_type)
+{
+    return select_record_impl(time,sat,code,required_message_mask,
+                              required_fcn,nav,allow_eph,allow_geph,NULL,0,
+                              eph_index,geph_index,message_type);
+}
+
+int rtklib_signal_select_record_candidates_ext(
+    gtime_t time, int sat, unsigned char code, int required_message_mask,
+    int required_fcn, const nav_t *nav, const int *candidates,
+    int ncandidates, int *eph_index, int *geph_index, int *message_type)
+{
+    if (!candidates && ncandidates!=0) return -1;
+    return select_record_impl(time,sat,code,required_message_mask,
+                              required_fcn,nav,NULL,NULL,
+                              candidates?candidates:&ncandidates,
+                              candidates?ncandidates:0,
+                              eph_index,geph_index,message_type);
 }
 
 int rtklib_signal_select_record_ext(gtime_t time, int sat, unsigned char code,
@@ -4393,14 +4433,14 @@ int rtklib_signal_code_bias_ext(gtime_t time, int sat, unsigned char code,
 
     if (sys==SYS_GLO) {
         geph=select_signal_geph(time,sat,code,required_message_mask,nav,
-                                INT_MIN,NULL,&type);
+                                INT_MIN,NULL,NULL,0,&type);
         if (!geph) return 0;
         stat=rtklib_signal_code_bias_selected_ext(sys,type,code,NULL,geph,
                                                   &bias,info);
         if (stat<=0) return stat;
     } else {
         eph=select_signal_eph(time,sat,code,required_message_mask,nav,
-                              NULL,&type);
+                              NULL,NULL,0,&type);
         if (!eph) return 0;
         stat=rtklib_signal_code_bias_selected_ext(sys,type,code,eph,NULL,
                                                   &bias,info);
@@ -4432,7 +4472,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
 
     if (sys==SYS_GLO) {
         geph=select_signal_geph(time,sat,code,required_message_mask,nav,
-                                INT_MIN,NULL,&type);
+                                INT_MIN,NULL,NULL,0,&type);
         if (!geph) return 0;
         *geph_out=*geph;
         if (info) {
@@ -4444,7 +4484,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
     }
 
     if (!required_message_mask) {
-        eph=select_generic_eph(time,sat,nav,NULL,&type);
+        eph=select_generic_eph(time,sat,nav,NULL,NULL,0,&type);
     }
     else {
         max_age=max_eph_age_sec(sys);

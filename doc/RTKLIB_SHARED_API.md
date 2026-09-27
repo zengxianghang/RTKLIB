@@ -48,6 +48,26 @@ unsupported or fails.  The adapter does not silently reselect or fall back.
 When no explicit record is supplied, RTKLIB's declared selection policy is
 used; receiver-log latest-received policy is not made a global RTKLIB default.
 
+The store keeps a selection index so a query does not scan the whole store.
+- **What it holds:**
+  - per satellite and source filter (none, RINEX, receiver), the ascending
+    `nav->eph`/`nav->geph` indices the full scans would accept;
+  - the records that refer to each entry.
+- **Queries:**
+  - a default selection visits only the satellite's entries, in the same
+    order, through `rtklib_signal_select_record_candidates_ext()`;
+  - an explicit `selected_record_id` is found by binary search, because
+    record ids are unique and ascending.
+- **Maintenance:** the index is synced after every load or insert and
+  rebuilt after a rolled-back load.
+- **Exactness:** every other satellite's entry is rejected first by the
+  full scan, so selection results and tie-breaks are identical. If the index
+  cannot be kept (allocation failure), the store falls back to the full
+  scans.
+- **Test:** `tests/rtklib_shared_api/test_selection_index` compares every
+  state and bias query of an exhaustive grid across both paths, byte for
+  byte.
+
 For Phase A, a selected GPS or QZSS `CNAV`/`CNV2` ephemeris is an explicit
 unsupported state-query result because its URAI components do not define the
 legacy metric-SVA variance published by this ABI.  The query returns
