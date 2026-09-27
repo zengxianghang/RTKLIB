@@ -73,6 +73,18 @@ int rtklib_signal_select_record_filtered_ext(
     const unsigned char *allow_geph, int *eph_index, int *geph_index,
     int *message_type);
 
+/* Indexed selector variant used by the opaque shared store.  candidates holds
+ * ascending nav->eph (or, for GLONASS, nav->geph) indices -- typically every
+ * entry of the satellite that passes the store's source filter -- and the
+ * selection visits only those entries, in that order.  Because the full scan
+ * rejects every other satellite's entry first, the result equals
+ * rtklib_signal_select_record_filtered_ext() with the matching allow array.
+ * A NULL candidates array with ncandidates == 0 selects nothing. */
+int rtklib_signal_select_record_candidates_ext(
+    gtime_t time, int sat, unsigned char code, int required_message_mask,
+    int required_fcn, const nav_t *nav, const int *candidates,
+    int ncandidates, int *eph_index, int *geph_index, int *message_type);
+
 /*
  * Select and copy the epoch/message-family broadcast ephemeris used by the
  * signal-specific bias and state paths. Exactly one of eph/geph is populated.

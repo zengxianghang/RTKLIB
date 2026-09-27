@@ -25,6 +25,48 @@ typedef struct {
     int32_t index;
 } shared_record_t;
 
+/* Selection index (Issue gnss-daily-analysis#421).  A default state/bias
+ * query used to scan the whole store several times: the source-filter allow
+ * mask over every record, RTKLIB's selection over every nav->eph/geph entry,
+ * and a scan of every record to map the chosen entry back to its identity.
+ * The index keeps, per satellite and per source filter, the ascending
+ * nav->eph/geph indices those scans would accept, plus the records that refer
+ * to each entry, so a query visits only one satellite's entries.  It is a
+ * pure cache: rtklib_signal_select_record_candidates_ext() visits the same
+ * entries in the same order as the full scan, and any allocation failure or
+ * unexpected layout switches the store back to the full scans. */
+enum {
+    SHARED_FILTER_ANY = 0,      /* no source filter: every nav entry */
+    SHARED_FILTER_RINEX = 1,    /* RTKLIB_SHARED_SOURCE_RINEX records */
+    SHARED_FILTER_RECEIVER = 2, /* RTKLIB_SHARED_SOURCE_RECEIVER records */
+    SHARED_FILTERS = 3
+};
+
+typedef struct {
+    int *items;
+    int n;
+    int capacity;
+} shared_index_list_t;
+
+typedef struct {
+    int32_t *first;  /* first record position referring to the entry, or -1 */
+    int32_t *count;  /* number of records referring to the entry */
+    size_t capacity;
+} shared_entry_records_t;
+
+typedef struct {
+    int valid;
+    int dirty;              /* a rollback may have rewritten indexed data */
+    int ids_ascending;      /* records are in strictly ascending record_id */
+    int synced_eph;
+    int synced_geph;
+    size_t synced_records;
+    shared_index_list_t eph[SHARED_FILTERS][MAXSAT + 1];
+    shared_index_list_t geph[SHARED_FILTERS][MAXSAT + 1];
+    shared_entry_records_t eph_records;
+    shared_entry_records_t geph_records;
+} shared_index_t;
+
 struct rtklib_shared_nav_store {
     nav_t nav;
     shared_record_t *records;
@@ -35,6 +77,7 @@ struct rtklib_shared_nav_store {
     size_t ion_capacity;
     rtklib_shared_record_id_t next_record_id;
     uint64_t next_rinex_order;
+    shared_index_t index;
 };
 
 static int finite_value(double value)
@@ -309,6 +352,187 @@ static int valid_rinex_path(const char *path)
     return 0;
 }
 
+static void index_free(shared_index_t *index)
+{
+    int filter, satellite;
+    for (filter = 0; filter < SHARED_FILTERS; ++filter) {
+        for (satellite = 0; satellite <= MAXSAT; ++satellite) {
+            free(index->eph[filter][satellite].items);
+            free(index->geph[filter][satellite].items);
+        }
+    }
+    free(index->eph_records.first);
+    free(index->eph_records.count);
+    free(index->geph_records.first);
+    free(index->geph_records.count);
+    memset(index, 0, sizeof(*index));
+}
+
+static void index_clear(shared_index_t *index)
+{
+    int filter, satellite;
+    for (filter = 0; filter < SHARED_FILTERS; ++filter) {
+        for (satellite = 0; satellite <= MAXSAT; ++satellite) {
+            index->eph[filter][satellite].n = 0;
+            index->geph[filter][satellite].n = 0;
+        }
+    }
+    index->synced_eph = index->synced_geph = 0;
+    index->synced_records = 0;
+    index->ids_ascending = 1;
+    index->dirty = 0;
+    index->valid = 1;
+}
+
+/* Appends one ascending entry index; a repeat of the last entry is kept once
+ * (several records may refer to the same entry).  Returns 0 on an allocation
+ * failure or an out-of-order index, which invalidates the index. */
+static int index_list_push(shared_index_list_t *list, int value)
+{
+    if (list->n > 0) {
+        if (list->items[list->n - 1] == value) return 1;
+        if (list->items[list->n - 1] > value) return 0;
+    }
+    if (list->n == list->capacity) {
+        int capacity = list->capacity ? list->capacity * 2 : 16;
+        int *items = (int *)realloc(list->items,
+                                    (size_t)capacity * sizeof(*items));
+        if (!items) return 0;
+        list->items = items;
+        list->capacity = capacity;
+    }
+    list->items[list->n++] = value;
+    return 1;
+}
+
+static int index_entry_records_reserve(shared_entry_records_t *entries,
+                                       size_t needed)
+{
+    size_t capacity, i;
+    int32_t *first, *count;
+
+    if (needed <= entries->capacity) return 1;
+    capacity = entries->capacity ? entries->capacity : 64;
+    while (capacity < needed) capacity *= 2;
+    first = (int32_t *)realloc(entries->first, capacity * sizeof(*first));
+    if (!first) return 0;
+    entries->first = first;
+    count = (int32_t *)realloc(entries->count, capacity * sizeof(*count));
+    if (!count) return 0;
+    entries->count = count;
+    for (i = entries->capacity; i < capacity; ++i) {
+        entries->first[i] = -1;
+        entries->count[i] = 0;
+    }
+    entries->capacity = capacity;
+    return 1;
+}
+
+static void index_entry_records_reset(shared_entry_records_t *entries)
+{
+    size_t i;
+    for (i = 0; i < entries->capacity; ++i) {
+        entries->first[i] = -1;
+        entries->count[i] = 0;
+    }
+}
+
+static int index_add_record(rtklib_shared_nav_store_t *store, size_t position)
+{
+    shared_index_t *index = &store->index;
+    const shared_record_t *record = &store->records[position];
+    shared_entry_records_t *entries;
+    int filter, satellite, glonass, count;
+
+    if (position > 0 && record->identity.record_id <=
+        store->records[position - 1].identity.record_id)
+        index->ids_ascending = 0;
+    glonass = record->kind == RTKLIB_SHARED_RECORD_GLO_EPH;
+    if (!glonass && record->kind != RTKLIB_SHARED_RECORD_EPH) return 1;
+    count = glonass ? store->nav.ng : store->nav.n;
+    if (record->index < 0 || record->index >= count) return 1;
+    entries = glonass ? &index->geph_records : &index->eph_records;
+    if (!index_entry_records_reserve(entries, (size_t)count)) return 0;
+    if (entries->count[record->index]++ == 0)
+        entries->first[record->index] = (int32_t)position;
+    filter = record->identity.source_kind == RTKLIB_SHARED_SOURCE_RINEX ?
+        SHARED_FILTER_RINEX :
+        record->identity.source_kind == RTKLIB_SHARED_SOURCE_RECEIVER ?
+        SHARED_FILTER_RECEIVER : -1;
+    if (filter < 0) return 1;
+    satellite = glonass ? store->nav.geph[record->index].sat :
+                          store->nav.eph[record->index].sat;
+    if (satellite <= 0 || satellite > MAXSAT) return 1;
+    return index_list_push(glonass ? &index->geph[filter][satellite] :
+                                     &index->eph[filter][satellite],
+                           record->index);
+}
+
+/* Brings the index up to date with entries and records appended since the
+ * last sync; a shrink or a rollback rebuilds it from scratch. */
+static void index_sync(rtklib_shared_nav_store_t *store)
+{
+    shared_index_t *index = &store->index;
+    int i, satellite;
+    size_t position;
+
+    if (!index->valid || index->dirty || store->nav.n < index->synced_eph ||
+        store->nav.ng < index->synced_geph ||
+        store->nrecords < index->synced_records) {
+        index_clear(index);
+        index_entry_records_reset(&index->eph_records);
+        index_entry_records_reset(&index->geph_records);
+    }
+    if (!index->valid) return;
+    for (i = index->synced_eph; i < store->nav.n; ++i) {
+        satellite = store->nav.eph[i].sat;
+        if (satellite <= 0 || satellite > MAXSAT) continue;
+        if (!index_list_push(&index->eph[SHARED_FILTER_ANY][satellite], i))
+            goto invalid;
+    }
+    for (i = index->synced_geph; i < store->nav.ng; ++i) {
+        satellite = store->nav.geph[i].sat;
+        if (satellite <= 0 || satellite > MAXSAT) continue;
+        if (!index_list_push(&index->geph[SHARED_FILTER_ANY][satellite], i))
+            goto invalid;
+    }
+    for (position = index->synced_records; position < store->nrecords;
+         ++position) {
+        if (!index_add_record(store, position)) goto invalid;
+    }
+    index->synced_eph = store->nav.n;
+    index->synced_geph = store->nav.ng;
+    index->synced_records = store->nrecords;
+    return;
+invalid:
+    /* Fall back to the full scans until the next rebuild. */
+    index->valid = 0;
+    index->dirty = 1;
+}
+
+/* The index is used only while it covers exactly the current store. */
+static int index_ready(const rtklib_shared_nav_store_t *store)
+{
+    return store->index.valid && !store->index.dirty &&
+        store->index.synced_eph == store->nav.n &&
+        store->index.synced_geph == store->nav.ng &&
+        store->index.synced_records == store->nrecords;
+}
+
+static const shared_index_list_t *index_candidates(
+    const rtklib_shared_nav_store_t *store, int glonass, uint32_t source_kind,
+    int satellite)
+{
+    int filter = source_kind == 0 ? SHARED_FILTER_ANY :
+        source_kind == RTKLIB_SHARED_SOURCE_RINEX ? SHARED_FILTER_RINEX :
+        source_kind == RTKLIB_SHARED_SOURCE_RECEIVER ?
+        SHARED_FILTER_RECEIVER : -1;
+    if (!index_ready(store) || filter < 0 || satellite <= 0 ||
+        satellite > MAXSAT) return NULL;
+    return glonass ? &store->index.geph[filter][satellite] :
+                     &store->index.eph[filter][satellite];
+}
+
 static void rollback_rinex_load(rtklib_shared_nav_store_t *store,
                                 int old_eph, int old_geph, int old_ion,
                                 int old_ns, int old_neop, int old_nsto,
@@ -320,6 +544,8 @@ static void rollback_rinex_load(rtklib_shared_nav_store_t *store,
     int cleanup_mask = 0;
 
     if (!store) return;
+    /* Counts and arrays are rewound below; rebuild the index at next sync. */
+    store->index.dirty = 1;
     lost_existing_storage =
         (old_eph > 0 && !store->nav.eph) ||
         (old_geph > 0 && !store->nav.geph) ||
@@ -587,6 +813,19 @@ static const shared_record_t *find_record_const(
 {
     size_t i;
     if (!store || record_id == 0) return NULL;
+    if (index_ready(store) && store->index.ids_ascending) {
+        /* Record ids are unique; ascending storage allows a binary search. */
+        size_t low = 0, high = store->nrecords;
+        while (low < high) {
+            size_t middle = low + (high - low) / 2;
+            rtklib_shared_record_id_t id =
+                store->records[middle].identity.record_id;
+            if (id == record_id) return &store->records[middle];
+            if (id < record_id) low = middle + 1;
+            else high = middle;
+        }
+        return NULL;
+    }
     for (i = 0; i < store->nrecords; ++i) {
         if (store->records[i].identity.record_id == record_id)
             return &store->records[i];
@@ -607,6 +846,7 @@ rtklib_shared_nav_store_t *rtklib_shared_nav_create(void)
     if (!store) return NULL;
     store->next_record_id = 1;
     store->next_rinex_order = 1;
+    index_sync(store);
     return store;
 }
 
@@ -619,6 +859,7 @@ void rtklib_shared_nav_destroy(rtklib_shared_nav_store_t *store)
     freenav(&store->nav, SHARED_NAV_FREE_ALL);
     free(store->records);
     free(store->ion_records);
+    index_free(&store->index);
     free(store);
 }
 
@@ -754,14 +995,17 @@ int rtklib_shared_nav_load_rinex(rtklib_shared_nav_store_t *store,
         rollback_rinex_load(store, old_eph, old_geph, old_ion, old_ns,
                             old_neop, old_nsto, old_records, old_ion_records,
                             old_next_record_id, old_rinex_order);
+        index_sync(store);
         return RTKLIB_SHARED_IO_ERROR;
     }
     if (!append_loaded_metadata(store, old_eph, old_geph, old_ion, source)) {
         rollback_rinex_load(store, old_eph, old_geph, old_ion, old_ns,
                             old_neop, old_nsto, old_records, old_ion_records,
                             old_next_record_id, old_rinex_order);
+        index_sync(store);
         return RTKLIB_SHARED_ALLOCATION_ERROR;
     }
+    index_sync(store);
     return RTKLIB_SHARED_OK;
 }
 
@@ -920,6 +1164,7 @@ int rtklib_shared_nav_insert_eph(rtklib_shared_nav_store_t *store,
         store->nav.n--;
         return RTKLIB_SHARED_ALLOCATION_ERROR;
     }
+    index_sync(store);
     return RTKLIB_SHARED_OK;
 }
 
@@ -1004,6 +1249,7 @@ int rtklib_shared_nav_insert_glo_eph(rtklib_shared_nav_store_t *store,
         store->nav.ng--;
         return RTKLIB_SHARED_ALLOCATION_ERROR;
     }
+    index_sync(store);
     return RTKLIB_SHARED_OK;
 }
 
@@ -1059,6 +1305,7 @@ int rtklib_shared_nav_insert_ion(rtklib_shared_nav_store_t *store,
         store->nion_records--;
         return RTKLIB_SHARED_ALLOCATION_ERROR;
     }
+    index_sync(store);
     return RTKLIB_SHARED_OK;
 }
 
@@ -1195,12 +1442,30 @@ static const shared_record_t *select_default_record(
     uint32_t source_kind = query->reserved[0];
     size_t i;
 
+    const shared_index_list_t *candidates;
+    const shared_entry_records_t *entries;
+    int selected;
+
     if (selection_error) *selection_error = RTKLIB_SHARED_OK;
     system = satsys(satellite, &prn);
     required_mask = query->family_mask ? (int)query->family_mask :
         rtklib_signal_family_mask_ext(system, query->rtklib_code);
     if (required_mask == 0) return NULL;
-    if (source_kind != 0) {
+    candidates = index_candidates(store, system == SYS_GLO, source_kind,
+                                  satellite);
+    if (candidates) {
+        /* The indexed path visits the entries the full scan below accepts,
+         * in the same order; see shared_index_t. */
+        if (source_kind != 0 &&
+            (system == SYS_GLO ? store->nav.ng : store->nav.n) <= 0)
+            return NULL;
+        stat = rtklib_signal_select_record_candidates_ext(
+            to_gtime(query->selection_time), satellite, query->rtklib_code,
+            required_mask,
+            system == SYS_GLO ? query->glonass_fcn : INT_MIN, &store->nav,
+            candidates->items, candidates->n, &eph_index, &geph_index,
+            &type);
+    } else if (source_kind != 0) {
         int count = system == SYS_GLO ? store->nav.ng : store->nav.n;
         unsigned char *allow;
         if (count <= 0) return NULL;
@@ -1239,6 +1504,21 @@ static const shared_record_t *select_default_record(
     }
     if (stat <= 0) return NULL;
     (void)prn;
+    selected = system == SYS_GLO ? geph_index : eph_index;
+    entries = system == SYS_GLO ? &store->index.geph_records :
+                                  &store->index.eph_records;
+    if (index_ready(store) && selected >= 0 &&
+        (size_t)selected < entries->capacity &&
+        entries->count[selected] <= 1) {
+        /* At most one record refers to the entry, so it is the one the scan
+         * below would reach first (or none). */
+        if (entries->count[selected] == 0) return NULL;
+        record = &store->records[entries->first[selected]];
+        if (record->identity.family == (uint32_t)type &&
+            (source_kind == 0 ||
+             record->identity.source_kind == source_kind)) return record;
+        return NULL;
+    }
     for (i = 0; i < store->nrecords; ++i) {
         record = &store->records[i];
         if ((system == SYS_GLO && record->kind ==
