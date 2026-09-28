@@ -50,27 +50,32 @@ jobs:
           make -C lib/rtklib_shared/gcc clean
           make -C lib/rtklib_shared/gcc all shared
 
-      - name: Run native regression suites
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: Test nav_sva_serialization
+        run: make -C tests/nav_sva_serialization clean test
 
-          suites=(
-            nav_sva_serialization
-            obs_codes_ext
-            rinex4_bds_cnav
-            rinex4_glo_l3oc
-            rinex4_ion
-            signal_bias_ext
-            residual_ext
-            rnx2range
-            modern_orbit
-            rtklib_shared_api
-          )
+      - name: Test obs_codes_ext
+        run: make -C tests/obs_codes_ext clean test
 
-          for suite in "${suites[@]}"; do
-            echo "::group::tests/${suite}"
-            make -C "tests/${suite}" clean
-            make -C "tests/${suite}" test
-            echo "::endgroup::"
-          done
+      - name: Test rinex4_bds_cnav
+        run: make -C tests/rinex4_bds_cnav clean test
+
+      - name: Test rinex4_glo_l3oc
+        run: make -C tests/rinex4_glo_l3oc clean test
+
+      - name: Test rinex4_ion
+        run: make -C tests/rinex4_ion clean test
+
+      - name: Test signal_bias_ext
+        run: make -C tests/signal_bias_ext clean test
+
+      - name: Test residual_ext
+        run: make -C tests/residual_ext clean test
+
+      - name: Test rnx2range
+        run: make -C tests/rnx2range clean test
+
+      - name: Test modern_orbit
+        run: make -C tests/modern_orbit clean test
+
+      - name: Test rtklib_shared_api
+        run: make -C tests/rtklib_shared_api clean test
