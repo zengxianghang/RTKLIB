@@ -8,8 +8,8 @@
  * The oracle vectors come from tools/oracle_vectors.py, an independent
  * implementation of the interface specifications.  The legacy baseline was
  * dumped by this program from the pre-fix library; legacy families must stay
- * bit-for-bit unchanged except the intended BDS-3 GEO D2 correction
- * (C59-C63), which is instead required to match the oracle.
+ * within tight floating-point tolerances across platforms except the intended
+ * BDS-3 GEO D2 correction (C59-C63), which must match the oracle.
  */
 
 #include "../../src/rtklib.h"
@@ -21,6 +21,8 @@
 
 #define ORACLE_POS_TOL_M 1E-3
 #define ORACLE_CLK_TOL_S 1E-12
+#define BASELINE_POS_TOL_M 1E-4
+#define BASELINE_CLK_TOL_S 1E-13
 #define CROSS_FAMILY_TOL_M 5.0
 #define CROSS_FAMILY_MAX_AGE_S 7200.0
 #define GEO_CORRECTION_MIN_M 1E5
@@ -262,8 +264,10 @@ static int check_legacy_baseline(const nav_t *nav, const char *path)
             corrected++;
             continue;
         }
-        if (rs[0] != x[0] || rs[1] != x[1] || rs[2] != x[2] ||
-            dts != clk || !(v == var)) {
+        if (!(fabs(rs[0] - x[0]) <= BASELINE_POS_TOL_M) ||
+            !(fabs(rs[1] - x[1]) <= BASELINE_POS_TOL_M) ||
+            !(fabs(rs[2] - x[2]) <= BASELINE_POS_TOL_M) ||
+            !(fabs(dts - clk) <= BASELINE_CLK_TOL_S) || !(v == var)) {
             snprintf(detail, sizeof(detail), "%s family 0x%x t=%d/%.1f "
                      "changed", sat_id, type, t_week, t_sow);
             fail("baseline", detail);
@@ -271,8 +275,9 @@ static int check_legacy_baseline(const nav_t *nav, const char *path)
         same++;
     }
     fclose(fp);
-    printf("legacy baseline: %d rows bit-identical, %d BDS-3 GEO D2 rows "
-           "intentionally corrected\n", same, corrected);
+    printf("legacy baseline: %d rows within %.0e m / %.0e s and exact variance, "
+           "%d BDS-3 GEO D2 rows intentionally corrected\n", same,
+           BASELINE_POS_TOL_M, BASELINE_CLK_TOL_S, corrected);
     return same > 0 && corrected > 0;
 }
 

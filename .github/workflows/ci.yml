@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-tests:
+    name: Ubuntu / ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: GCC
+            cc: gcc
+            cxx: g++
+          - compiler: Clang
+            cc: clang
+            cxx: clang++
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compiler versions
+        run: |
+          "$CC" --version
+          "$CXX" --version
+          make --version
+
+      - name: Build shared library
+        run: |
+          make -C lib/rtklib_shared/gcc clean
+          make -C lib/rtklib_shared/gcc all shared
+
+      - name: Test nav_sva_serialization
+        run: make -C tests/nav_sva_serialization clean test
+
+      - name: Test obs_codes_ext
+        run: make -C tests/obs_codes_ext clean test
+
+      - name: Test rinex4_bds_cnav
+        run: make -C tests/rinex4_bds_cnav clean test
+
+      - name: Test rinex4_glo_l3oc
+        run: make -C tests/rinex4_glo_l3oc clean test
+
+      - name: Test rinex4_ion
+        run: make -C tests/rinex4_ion clean test
+
+      - name: Test signal_bias_ext
+        run: make -C tests/signal_bias_ext clean test
+
+      - name: Test residual_ext
+        run: make -C tests/residual_ext clean test
+
+      - name: Test rnx2range
+        run: make -C tests/rnx2range clean test
+
+      - name: Test modern_orbit
+        run: make -C tests/modern_orbit clean test
+
+      - name: Test rtklib_shared_api
+        run: make -C tests/rtklib_shared_api clean test
