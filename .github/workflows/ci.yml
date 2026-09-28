@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-tests:
+    name: Ubuntu / ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: GCC
+            cc: gcc
+            cxx: g++
+          - compiler: Clang
+            cc: clang
+            cxx: clang++
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compiler versions
+        run: |
+          "$CC" --version
+          "$CXX" --version
+          make --version
+
+      - name: Build shared library
+        run: |
+          make -C lib/rtklib_shared/gcc clean
+          make -C lib/rtklib_shared/gcc all shared
+
+      - name: Run native regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          suites=(
+            nav_sva_serialization
+            obs_codes_ext
+            rinex4_bds_cnav
+            rinex4_glo_l3oc
+            rinex4_ion
+            signal_bias_ext
+            residual_ext
+            rnx2range
+            modern_orbit
+            rtklib_shared_api
+          )
+
+          for suite in "${suites[@]}"; do
+            echo "::group::tests/${suite}"
+            make -C "tests/${suite}" clean
+            make -C "tests/${suite}" test
+            echo "::endgroup::"
+          done
