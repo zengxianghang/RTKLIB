@@ -1901,6 +1901,121 @@ int rtklib_shared_modern_ura_query(const rtklib_shared_nav_store_t *store,
     return RTKLIB_SHARED_OK;
 }
 
+/* Upper bounds in metres from ICAO Annex 10, Volume I, Appendix B,
+ * Tables B BDS-12-1 and B BDS-12-2.  Indices -16 and 15 do not provide
+ * an accuracy prediction and are deliberately absent from this table. */
+static double bds_sisa_bound(int index)
+{
+    static const double bound_m[] = {
+        0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.11, 0.15,
+        0.21, 0.30, 0.43, 0.60, 0.85, 1.20, 1.70, 2.40,
+        3.40, 4.85, 6.85, 9.65, 13.65, 24.00, 48.00, 96.00,
+        192.00, 384.00, 768.00, 1536.00, 3072.00, 6144.00
+    };
+    return bound_m[index + 15];
+}
+
+static void init_bds_sisa_result(rtklib_shared_bds_sisa_result_t *result)
+{
+    uint32_t declared = result->abi_version;
+    memset(result, 0, sizeof(*result));
+    result->abi_version = declared;
+    result->struct_size = (uint32_t)sizeof(*result);
+    result->status = RTKLIB_SHARED_QUERY_FAILED;
+    result->sisma_status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+    result->sismai_index = -1;
+    result->elapsed_since_top_s = NAN;
+    result->sisa_oe_m = NAN;
+    result->sisa_ocb_m = NAN;
+    result->sisa_oc_m = NAN;
+    result->sisa_m = NAN;
+    init_identity(&result->identity);
+}
+
+int rtklib_shared_bds_sisa_query(const rtklib_shared_nav_store_t *store,
+                                 const rtklib_shared_state_query_t *query,
+                                 rtklib_shared_bds_sisa_result_t *result)
+{
+    const shared_record_t *record;
+    const eph_t *eph;
+    gtime_t top_time;
+    int satellite, selection_error, oe, ocb, oc1, oc2, sismai;
+    double elapsed, oc;
+
+    if (!result || !valid_header(result->abi_version, result->struct_size,
+                                 sizeof(*result)) ||
+        !declares_minor(result->abi_version, 3))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    init_bds_sisa_result(result);
+    if (!store || !request_is_valid(query, &satellite))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    record = record_for_query(store, query, satellite, &selection_error);
+    if (!record) {
+        if (selection_error == RTKLIB_SHARED_INVALID_ARGUMENT)
+            return RTKLIB_SHARED_INVALID_ARGUMENT;
+        result->status = selection_error == RTKLIB_SHARED_ALLOCATION_ERROR ?
+            RTKLIB_SHARED_QUERY_FAILED : RTKLIB_SHARED_QUERY_UNAVAILABLE;
+        return selection_error == RTKLIB_SHARED_ALLOCATION_ERROR ?
+            RTKLIB_SHARED_ALLOCATION_ERROR : RTKLIB_SHARED_UNAVAILABLE;
+    }
+    result->identity = record->identity;
+    if (selection_error == RTKLIB_SHARED_UNSUPPORTED ||
+        !is_bds_bcnav_record(record) || is_bds_geo_bcnav_record(record) ||
+        record->identity.family == RTKLIB_SHARED_NAV_CNV3) {
+        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    if (record->index < 0 || record->index >= store->nav.n) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    eph = &store->nav.eph[record->index];
+    if (!integral_in(eph->sisai[0], -16, 15, &oe) ||
+        !integral_in(eph->sisai[1], -16, 15, &ocb) ||
+        !integral_in(eph->sisai[2], -1, 7, &oc1) ||
+        !integral_in(eph->sisai[3], -1, 7, &oc2) ||
+        eph->week < 0 || eph->week > RTKLIB_SHARED_MAX_WEEK ||
+        !finite_value(eph->top) || eph->top < 0.0 ||
+        eph->top >= 604800.0) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    top_time = shared_adjweek(bdt2gpst(bdt2time(eph->week, eph->top)),
+                              to_gtime(record->identity.toe));
+    if (fabs(timediff(top_time, to_gtime(record->identity.toe))) >
+        302400.0) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    result->sisai_oe_index = oe;
+    result->sisai_ocb_index = ocb;
+    result->sisai_oc1_index = oc1;
+    result->sisai_oc2_index = oc2;
+    /* SISMAI has no published metric mapping.  A malformed or absent raw
+     * SISMAI must not invalidate the independent SISA calculation. */
+    if (integral_in(eph->sva, -1, 15, &sismai))
+        result->sismai_index = sismai;
+    elapsed = timediff(to_gtime(query->evaluation_time), top_time);
+    result->elapsed_since_top_s = elapsed;
+    /* -1 in BRD400's clock-rate index fields denotes unavailable data;
+     * published 0..7 indices alone have the ICAO rate mapping. */
+    if (oe == -16 || oe == 15 || ocb == -16 || ocb == 15 ||
+        oc1 == -1 || oc2 == -1 || elapsed < 0.0) {
+        result->status = RTKLIB_SHARED_QUERY_UNAVAILABLE;
+        return RTKLIB_SHARED_UNAVAILABLE;
+    }
+    result->sisa_oe_m = bds_sisa_bound(oe);
+    result->sisa_ocb_m = bds_sisa_bound(ocb);
+    oc = result->sisa_ocb_m + ldexp(1.0, -(14 + oc1)) * elapsed;
+    if (elapsed > 93600.0)
+        oc += ldexp(1.0, -(28 + oc2)) *
+              (elapsed - 93600.0) * (elapsed - 93600.0);
+    result->sisa_oc_m = oc;
+    result->sisa_m = hypot(result->sisa_oe_m * sin(14.0 * D2R), oc);
+    result->status = RTKLIB_SHARED_QUERY_AVAILABLE;
+    return RTKLIB_SHARED_OK;
+}
+
 static uint32_t signal_family_mask(int system, unsigned char code)
 {
     return (uint32_t)rtklib_signal_family_mask_ext(system, code);
