@@ -4,6 +4,33 @@ This document describes ABI version 1 of `src/rtklib_shared_api.h`.  The
 header is the only downstream compile-time contract.  `nav_t`, `eph_t`,
 `geph_t`, `ion_t` and `gtime_t` remain private to RTKLIB.
 
+## BDS modern accuracy (ABI 1.3)
+
+`rtklib_shared_bds_sisa_query()` selects the same record as a state query and
+evaluates the B-CNAV1/B-CNAV2 SISA bound in metres. It maps SISAIoe and
+SISAIocb to their published upper bounds, then computes SISAoc from the
+SISAIoc1/SISAIoc2 rates and elapsed BDT time since `top` (including the
+93,600-second breakpoint). The composite is
+`hypot(SISAoe * sin(14 degrees), SISAoc)`. The evaluator follows [ICAO Annex
+10's BDS amendment, Appendix B, Tables B BDS-12-1/12-2 and section
+3.1.4.2.5](https://www.icao.int/sites/default/files/APAC/GBAS-SBAS/041e_Amendment-to-Annex-10-Vol-I-DFMC_GLONASS_BDS.pdf).
+
+The query reports `UNAVAILABLE` for no-prediction indices, absent BRD400
+clock-rate indices or an evaluation before `top`; malformed fields fail closed.
+It reports `UNSUPPORTED` for B-CNAV3 and BDS GEO B-CNAV. SISMAI is returned
+only as a raw index with `sisma_status=UNSUPPORTED`: the published [B1C
+ICD](https://en.beidou.gov.cn/SYSTEMS/ICD/201806/P020180608519640359959.pdf),
+[B2a ICD](https://en.beidou.gov.cn/SYSTEMS/ICD/201806/P020180608518432765621.pdf)
+and [B2b ICD](https://en.beidou.gov.cn/SYSTEMS/ICD/202008/P020231201537880833625.pdf)
+defer its conversion table, and the ICAO amendment marks SISMA
+as reserved for future use. No SISMA metric or variance is inferred. The
+existing ABI 1.0/1.1 state-query variance contract is unchanged: SISA is an
+integrity bound, not `variance_m2`, and private PVT weighting is unaffected.
+
+`tests/modern_orbit/test_bds_sisa` checks 204 vectors independently derived
+from real BRD400 CNV1/CNV2 fields and checks no-prediction, invalid-index,
+older-ABI, B-CNAV3 and GEO boundaries.
+
 ## Handle and status contract
 
 `rtklib_shared_nav_store_t` is opaque.  A store can be populated either by

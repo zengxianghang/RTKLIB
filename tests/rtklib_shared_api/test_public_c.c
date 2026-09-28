@@ -15,6 +15,7 @@ int main(void)
     rtklib_shared_bias_result_t bias_result = {0};
     rtklib_shared_ion_result_t ion_result = {0};
     rtklib_shared_modern_ura_result_t ura_result = {0};
+    rtklib_shared_bds_sisa_result_t sisa_result = {0};
     rtklib_shared_nav_store_t *store;
     rtklib_shared_record_id_t record_id = 0;
     rtklib_shared_time_t time = {0, 0.0};
@@ -69,6 +70,9 @@ int main(void)
     ura_result.struct_size = (uint32_t)sizeof(ura_result);
     (void)rtklib_shared_modern_ura_query(store, &state_query, 0.5,
                                          &ura_result);
+    sisa_result.abi_version = RTKLIB_SHARED_ABI_VERSION;
+    sisa_result.struct_size = (uint32_t)sizeof(sisa_result);
+    (void)rtklib_shared_bds_sisa_query(store, &state_query, &sisa_result);
     (void)rtklib_shared_tropo_saastamoinen(time, llh, azel, 0.0, &delay);
     (void)rtklib_shared_klobuchar(time, klobuchar, llh, azel, &delay);
     (void)rtklib_shared_ion_query(store, RTKLIB_SHARED_SYS_GPS,

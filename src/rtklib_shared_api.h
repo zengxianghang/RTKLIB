@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define RTKLIB_SHARED_ABI_MAJOR 1u
-#define RTKLIB_SHARED_ABI_MINOR 2u
+#define RTKLIB_SHARED_ABI_MINOR 3u
 #define RTKLIB_SHARED_ABI_VERSION \
     ((RTKLIB_SHARED_ABI_MAJOR << 16) | RTKLIB_SHARED_ABI_MINOR)
 /* Every ABI 1.x POD keeps the 1.0 layout and size.  A caller may keep
@@ -320,6 +320,8 @@ typedef struct {
      *                SISMAI indices); variance_m2 is NaN while the position
      *                and clock state may still be valid.  GPS/QZSS CNAV
      *                accuracy is available from rtklib_shared_modern_ura_query;
+     *                BDS B-CNAV1/2 SISA is available from
+     *                rtklib_shared_bds_sisa_query (it is not a variance);
      *   UNAVAILABLE  no state was evaluated.
      * Callers declaring 1.0 see 1.0 behaviour: GPS/QZSS CNAV/CNAV-2 states
      * stay UNSUPPORTED (Issue #20 Phase A containment), B-CNAV variance is
@@ -382,6 +384,30 @@ typedef struct {
     rtklib_shared_record_identity_t identity;
     uint8_t reserved[32];
 } rtklib_shared_modern_ura_result_t;
+
+/* ABI 1.3: BDS B-CNAV1/2 SISA for integrity use (ICAO Annex 10, Volume I,
+ * Appendix B, 3.1.4.2.5 and Tables B BDS-12-1/12-2).  The B1C/B2a/B2b
+ * ICDs name SISMAI but defer its mapping; sisma_status remains UNSUPPORTED
+ * and no SISMA metric is inferred from its raw index.  B-CNAV3 and BDS GEO
+ * B-CNAV are unsupported pending a published algorithm and real evidence. */
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    int32_t status;
+    int32_t sisma_status;
+    int32_t sisai_oe_index;
+    int32_t sisai_ocb_index;
+    int32_t sisai_oc1_index;
+    int32_t sisai_oc2_index;
+    int32_t sismai_index;
+    double elapsed_since_top_s;
+    double sisa_oe_m;
+    double sisa_ocb_m;
+    double sisa_oc_m;
+    double sisa_m;
+    rtklib_shared_record_identity_t identity;
+    uint8_t reserved[32];
+} rtklib_shared_bds_sisa_result_t;
 
 typedef struct {
     uint32_t abi_version;
@@ -447,6 +473,11 @@ int rtklib_shared_modern_ura_query(const rtklib_shared_nav_store_t *store,
                                    const rtklib_shared_state_query_t *query,
                                    double elevation_rad,
                                    rtklib_shared_modern_ura_result_t *result);
+/* Selects the same record as rtklib_shared_state_query.  SISA is a bound in
+ * metres, not the scalar variance_m2 from the state result. */
+int rtklib_shared_bds_sisa_query(const rtklib_shared_nav_store_t *store,
+                                 const rtklib_shared_state_query_t *query,
+                                 rtklib_shared_bds_sisa_result_t *result);
 int rtklib_shared_ion_query(const rtklib_shared_nav_store_t *store,
                             uint32_t system, uint32_t family_mask,
                             rtklib_shared_time_t evaluation_time,
