@@ -53,6 +53,7 @@ rnx2unicore.c ^
 ..\..\src\rtcm.c ^
 ..\..\src\rtcm2.c ^
 ..\..\src\rtcm3.c ^
+..\..\src\rtcm3e.c ^
 ..\..\src\lambda.c ^
 ..\..\src\unicore_gpscnav.c ^
 /I..\..\src ^
