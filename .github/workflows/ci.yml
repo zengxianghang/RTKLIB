@@ -108,6 +108,30 @@ jobs:
           if ($lines.Count -ne 6) {
             throw "Expected 6 GPSCNAVEPHA records, got $($lines.Count)"
           }
-          if (-not $lines[0].StartsWith("#GPSCNAVEPHA")) {
-            throw "Unexpected output prefix: $($lines[0])"
+
+          foreach ($line in $lines) {
+            if (-not $line.StartsWith("#GPSCNAVEPHA,97,GPS,FINE,")) {
+              throw "Unexpected Unicore ASCII header: $line"
+            }
+
+            $parts = $line -split ';', 2
+            if ($parts.Count -ne 2) {
+              throw "Missing header/data semicolon: $line"
+            }
+
+            $dataAndCrc = $parts[1] -split '\*', 2
+            if ($dataAndCrc.Count -ne 2) {
+              throw "Missing CRC delimiter: $line"
+            }
+
+            $fields = @($dataAndCrc[0].Split(','))
+            if ($fields.Count -ne 46) {
+              throw "Expected 46 GPSCNAVEPH payload fields, got $($fields.Count): $line"
+            }
+
+            for ($i = 10; $i -le 13; $i++) {
+              if ([int]$fields[$i] -lt 0) {
+                throw "URAIndex must not be negative: $line"
+              }
+            }
           }
