@@ -79,3 +79,22 @@ jobs:
 
       - name: Test rtklib_shared_api
         run: make -C tests/rtklib_shared_api clean test
+
+  windows-msvc:
+    name: Windows / MSVC
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build rnx2unicore
+        shell: cmd
+        working-directory: app/rnx2unicore
+        run: call build_vs2022.bat
+
+      - name: Smoke test rnx2unicore
+        shell: cmd
+        working-directory: app/rnx2unicore
+        run: rnx2unicore.exe -h
