@@ -11,7 +11,7 @@ if %errorlevel%==0 goto BUILD
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (
     echo ERROR: Cannot find vswhere.exe
-    pause
+    if not defined CI pause
     exit /b 1
 )
 
@@ -19,14 +19,14 @@ for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Mi
 
 if not defined VS_PATH (
     echo ERROR: Visual Studio with C++ tools was not found
-    pause
+    if not defined CI pause
     exit /b 1
 )
 
 call "%VS_PATH%\Common7\Tools\VsDevCmd.bat" -arch=x64
 if errorlevel 1 (
     echo ERROR: Failed to initialize Visual Studio environment
-    pause
+    if not defined CI pause
     exit /b 1
 )
 
@@ -64,7 +64,7 @@ if errorlevel 1 (
     echo ==========================================
     echo BUILD FAILED
     echo ==========================================
-    pause
+    if not defined CI pause
     exit /b 1
 )
 
@@ -73,4 +73,4 @@ echo ==========================================
 echo BUILD SUCCESS
 echo ==========================================
 echo Output: %CD%\rnx2unicore.exe
-pause
+if not defined CI pause
