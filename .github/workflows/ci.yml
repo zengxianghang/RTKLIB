@@ -98,3 +98,16 @@ jobs:
         shell: cmd
         working-directory: app/rnx2unicore
         run: rnx2unicore.exe -h
+
+      - name: Functional test GPS CNAV conversion
+        shell: powershell
+        working-directory: app/rnx2unicore
+        run: |
+          .\rnx2unicore.exe -i ..\..\tests\modern_orbit\fixtures\brd400_2024030_modern_orbit.rnx -o gpscnav_ci.log
+          $lines = @(Get-Content gpscnav_ci.log)
+          if ($lines.Count -ne 6) {
+            throw "Expected 6 GPSCNAVEPHA records, got $($lines.Count)"
+          }
+          if (-not $lines[0].StartsWith("#GPSCNAVEPHA")) {
+            throw "Unexpected output prefix: $($lines[0])"
+          }
