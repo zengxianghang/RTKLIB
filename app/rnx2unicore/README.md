@@ -25,9 +25,21 @@ Usage:
   rnx2unicore -i <rinex_nav> [-i <rinex_nav> ...] -o <output>
 ```
 
+## Output time semantics
+
+RINEX navigation files do not preserve the receiver's original `GPSCNAVEPHA` log-output time. The converter therefore uses a deterministic synthetic log timestamp:
+
+- Unicore ASCII header `Wn/Ms` = the RINEX ephemeris transmission time `eph->ttr` converted to GPS week and milliseconds-of-week.
+- GPSCNAVEPH payload `TOW` remains the CNAV transmission/message timestamp parsed by RTKLIB.
+- All GPS CNAV/CNV2 records are sorted by `eph->ttr` before output so the generated log is chronologically ordered like a receiver log.
+- If records have the same `ttr`, PRN is used as the next sort key, then CNAV message type, then original input order.
+
+The header timestamp is therefore a synthetic timestamp chosen for chronological log generation; it is not claimed to reconstruct the receiver's true historical log-output time.
+
 ## Current scope
 
 - GPS CNAV and CNV2 ephemeris records only.
 - Output format: Unicore `GPSCNAVEPHA` ASCII.
-- RINEX 4.02 optional integer flags are not decoded yet; the corresponding output value is fixed to `0`.
+- Negative/unknown RINEX URA index values are exported as `0` because the Unicore `URAIndex[]` fields are unsigned.
+- RINEX 4.02 optional integer flags are not decoded yet.
 - Existing RTKLIB RINEX parsing is reused; `eph_t` is not extended for this converter.
