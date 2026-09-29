@@ -106,6 +106,7 @@ int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
 
     crc=unicore_crc32(body+1,pos-1);
 
-    fprintf(fp,"%s*%08x\r\n",body,crc);
+    /* Use '\n' with a text-mode stream. MSVC translates it to CRLF once. */
+    fprintf(fp,"%s*%08x\n",body,crc);
     return 1;
 }
