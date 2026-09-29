@@ -109,6 +109,7 @@ jobs:
             throw "Expected 6 GPSCNAVEPHA records, got $($lines.Count)"
           }
 
+          $previousAbsMs = $null
           foreach ($line in $lines) {
             if (-not $line.StartsWith("#GPSCNAVEPHA,97,GPS,FINE,")) {
               throw "Unexpected Unicore ASCII header: $line"
@@ -118,6 +119,23 @@ jobs:
             if ($parts.Count -ne 2) {
               throw "Missing header/data semicolon: $line"
             }
+
+            $headerFields = @($parts[0].Split(','))
+            if ($headerFields.Count -ne 10) {
+              throw "Expected 10 Unicore ASCII header fields, got $($headerFields.Count): $line"
+            }
+
+            $headerWeek = [long]$headerFields[4]
+            $headerMs = [long]$headerFields[5]
+            if ($headerMs -lt 0 -or $headerMs -ge 604800000) {
+              throw "Header milliseconds-of-week out of range: $line"
+            }
+
+            $absoluteMs = $headerWeek * [long]604800000 + $headerMs
+            if ($null -ne $previousAbsMs -and $absoluteMs -lt $previousAbsMs) {
+              throw "GPSCNAVEPHA output is not sorted by synthetic header GPST: $line"
+            }
+            $previousAbsMs = $absoluteMs
 
             $dataAndCrc = $parts[1] -split '\*', 2
             if ($dataAndCrc.Count -ne 2) {
@@ -133,5 +151,14 @@ jobs:
               if ([int]$fields[$i] -lt 0) {
                 throw "URAIndex must not be negative: $line"
               }
+            }
+
+            $payloadZWeek = [long]$fields[15]
+            $payloadTow = [double]::Parse(
+              $fields[16],
+              [System.Globalization.CultureInfo]::InvariantCulture)
+            $payloadTowMs = [long][Math]::Floor($payloadTow * 1000.0 + 0.5)
+            if ($headerWeek -ne $payloadZWeek -or $headerMs -ne $payloadTowMs) {
+              throw "Synthetic header GPST must match ephemeris ttr/TOW: $line"
             }
           }
