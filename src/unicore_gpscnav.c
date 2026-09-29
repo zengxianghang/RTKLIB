@@ -41,7 +41,7 @@ int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
 
     sys=satsys(eph->sat,&prn);
     if (sys!=SYS_GPS) return 0;
-    if (!(eph->code&NAV_CNAV)&&!(eph->code&NAV_CNV2)) return 0;
+    if (eph->hdr.msg_type!=NAV_CNAV&&eph->hdr.msg_type!=NAV_CNV2) return 0;
 
     tow=time2gpst(eph->ttr,&zweek);
     toe=eph->toes;
@@ -65,8 +65,8 @@ int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
     append_field(body,&pos,
         ",%.12e,%d,%d,%.12e,%.12e,%.12e,%.12e",
         eph->top,
-        eph->wn_op,
-        eph->urai_ed,
+        (int)eph->wn_op,
+        (int)eph->urai_ed,
         eph->urai_ned[0],
         eph->urai_ned[1],
         eph->urai_ned[2],
