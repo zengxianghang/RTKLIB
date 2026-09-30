@@ -62,6 +62,9 @@ jobs:
       - name: Test rinex4_glo_l3oc
         run: make -C tests/rinex4_glo_l3oc clean test
 
+      - name: Test rinex3_glo_orbit4
+        run: make -C tests/rinex3_glo_orbit4 clean test
+
       - name: Test rinex4_ion
         run: make -C tests/rinex4_ion clean test
 
