@@ -79,3 +79,146 @@ jobs:
 
       - name: Test rtklib_shared_api
         run: make -C tests/rtklib_shared_api clean test
+
+  windows-msvc:
+    name: Windows / MSVC
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build rnx2unicore
+        shell: cmd
+        working-directory: app/rnx2unicore
+        run: call build_vs2022.bat
+
+      - name: Smoke test rnx2unicore
+        shell: cmd
+        working-directory: app/rnx2unicore
+        run: rnx2unicore.exe -h
+
+      - name: Functional test GPS/QZSS CNAV and L1C conversion
+        shell: powershell
+        working-directory: app/rnx2unicore
+        run: |
+          .\rnx2unicore.exe -i ..\..\tests\modern_orbit\fixtures\brd400_2024030_modern_orbit.rnx -o gpscnav_ci.log
+          $lines = @(Get-Content gpscnav_ci.log)
+          if ($lines.Count -le 6) {
+            throw "Expected mixed GPS/QZSS CNAV/CNV2 output, got only $($lines.Count) records"
+          }
+
+          $previousAbsMs = $null
+          $gpscnavCount = 0
+          $gpsl1cCount = 0
+          $seenL1cQzs34 = $false
+          $seenL1cQzs35 = $false
+
+          foreach ($line in $lines) {
+            $parts = $line -split ';', 2
+            if ($parts.Count -ne 2) {
+              throw "Missing header/data semicolon: $line"
+            }
+
+            $headerFields = @($parts[0].Split(','))
+            $headerWeek = 0L
+            $headerMs = 0L
+
+            if ($line.StartsWith("#GPSCNAVEPHA,")) {
+              $gpscnavCount++
+              if ($headerFields.Count -ne 10) {
+                throw "Expected 10 Unicore ASCII header fields: $line"
+              }
+              if ($headerFields[1] -ne "97" -or $headerFields[2] -ne "GPS" -or
+                  $headerFields[3] -ne "FINE") {
+                throw "Unexpected GPSCNAVEPHA header: $line"
+              }
+              $headerWeek = [long]$headerFields[4]
+              $headerMs = [long]$headerFields[5]
+            }
+            elseif ($line.StartsWith("#GPSL1CEPHEMA,")) {
+              $gpsl1cCount++
+              if ($headerFields.Count -ne 10) {
+                throw "Expected 10 NovAtel ASCII header fields: $line"
+              }
+              if ($headerFields[1] -ne "COM1" -or $headerFields[2] -ne "0" -or
+                  $headerFields[3] -ne "0.0" -or $headerFields[4] -ne "FINE" -or
+                  $headerFields[7] -ne "0" -or $headerFields[8] -ne "0" -or
+                  $headerFields[9] -ne "0") {
+                throw "Unexpected NovAtel GPSL1CEPHEMA header: $line"
+              }
+              $headerWeek = [long]$headerFields[5]
+              $headerSeconds = [double]::Parse(
+                $headerFields[6],
+                [System.Globalization.CultureInfo]::InvariantCulture)
+              $headerMs = [long][Math]::Floor($headerSeconds * 1000.0 + 0.5)
+            }
+            else {
+              throw "Unexpected output sentence: $line"
+            }
+
+            if ($headerMs -lt 0 -or $headerMs -ge 604800000) {
+              throw "Header time out of range: $line"
+            }
+
+            $absoluteMs = $headerWeek * [long]604800000 + $headerMs
+            if ($null -ne $previousAbsMs -and $absoluteMs -lt $previousAbsMs) {
+              throw "Output is not sorted by synthetic header GPST: $line"
+            }
+            $previousAbsMs = $absoluteMs
+
+            $dataAndCrc = $parts[1] -split '\*', 2
+            if ($dataAndCrc.Count -ne 2) {
+              throw "Missing CRC delimiter: $line"
+            }
+
+            $fields = @($dataAndCrc[0].Split(','))
+            if ($fields.Count -ne 46) {
+              throw "Expected 46 GPSCNAV-format payload fields, got $($fields.Count): $line"
+            }
+
+            $prn = [int]$fields[0]
+            if ($prn -lt 1 -or $prn -gt 42) {
+              throw "Output PRN must be in range 1..42: $line"
+            }
+            if ($line.StartsWith("#GPSL1CEPHEMA,")) {
+              if ($prn -eq 34) { $seenL1cQzs34 = $true }
+              if ($prn -eq 35) { $seenL1cQzs35 = $true }
+              if ([int]$fields[3] -ne 0) {
+                throw "GPSL1CEPHEMA reserved[0] must be 0 for CNV2/L1C: $line"
+              }
+            }
+            else {
+              if ([int]$fields[3] -ne 1) {
+                throw "GPSCNAVEPHA reserved[0] must be 1 for CNAV: $line"
+              }
+            }
+
+            for ($i = 10; $i -le 13; $i++) {
+              if ([int]$fields[$i] -lt 0) {
+                throw "URAIndex must not be negative: $line"
+              }
+            }
+
+            $payloadZWeek = [long]$fields[15]
+            $payloadTow = [double]::Parse(
+              $fields[16],
+              [System.Globalization.CultureInfo]::InvariantCulture)
+            $payloadTowMs = [long][Math]::Floor($payloadTow * 1000.0 + 0.5)
+            if ($headerWeek -ne $payloadZWeek -or [Math]::Abs($headerMs - $payloadTowMs) -gt 1) {
+              throw "Synthetic header GPST must match ephemeris ttr/TOW: $line"
+            }
+          }
+
+          if ($gpscnavCount -eq 0) {
+            throw "Expected at least one GPSCNAVEPHA record"
+          }
+          if ($gpsl1cCount -eq 0) {
+            throw "Expected at least one GPSL1CEPHEMA record from CNV2"
+          }
+          if (-not $seenL1cQzs34 -or -not $seenL1cQzs35) {
+            throw "Expected QZSS J02/J03 CNV2 to map to GPSL1CEPHEMA PRN 34/35"
+          }
+
+          Write-Host "GPSCNAVEPHA=$gpscnavCount GPSL1CEPHEMA=$gpsl1cCount"
