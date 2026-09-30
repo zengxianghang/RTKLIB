@@ -5,6 +5,8 @@
 #include <string.h>
 
 #define MAX_INPUT_FILE 256
+#define UNICORE_QZS_MIN_PRN 33
+#define UNICORE_QZS_MAX_PRN 42
 
 typedef struct {
     eph_t *eph;
@@ -17,10 +19,30 @@ static void print_help(void)
     printf("  rnx2unicore -i <rinex_nav> [-i <rinex_nav> ...] -o <output>\n");
 }
 
-static int is_gps_cnav(const eph_t *eph)
+static int gpscnav_output_prn(const eph_t *eph, int *out_prn)
 {
+    int sys,prn,mapped_prn;
+
     if (!eph) return 0;
-    if (satsys(eph->sat,NULL)!=SYS_GPS) return 0;
+
+    sys=satsys(eph->sat,&prn);
+    if (sys==SYS_GPS && prn>=MINPRNGPS && prn<=MAXPRNGPS) {
+        mapped_prn=prn;
+    }
+    else if (sys==SYS_QZS && prn>=MINPRNQZS && prn<=MAXPRNQZS) {
+        mapped_prn=UNICORE_QZS_MIN_PRN+(prn-MINPRNQZS);
+        if (mapped_prn>UNICORE_QZS_MAX_PRN) return 0;
+    }
+    else {
+        return 0;
+    }
+    if (out_prn) *out_prn=mapped_prn;
+    return 1;
+}
+
+static int is_unicore_gpscnav(const eph_t *eph)
+{
+    if (!gpscnav_output_prn(eph,NULL)) return 0;
     return eph->hdr.msg_type==NAV_CNAV || eph->hdr.msg_type==NAV_CNV2;
 }
 
@@ -34,8 +56,8 @@ static int compare_cnav_ref(const void *p1, const void *p2)
     if (dt<0.0) return -1;
     if (dt>0.0) return 1;
 
-    satsys(a->eph->sat,&prn_a);
-    satsys(b->eph->sat,&prn_b);
+    gpscnav_output_prn(a->eph,&prn_a);
+    gpscnav_output_prn(b->eph,&prn_b);
     if (prn_a<prn_b) return -1;
     if (prn_a>prn_b) return 1;
 
@@ -99,19 +121,19 @@ int main(int argc, char **argv)
             continue;
         }
         for (j=before;j<nav.n;j++) {
-            if (is_gps_cnav(&nav.eph[j])) file_cnav++;
+            if (is_unicore_gpscnav(&nav.eph[j])) file_cnav++;
         }
         total_cnav+=file_cnav;
-        printf("[INFO] %s: added %d broadcast ephemerides, GPS CNAV/CNV2=%d\n",
+        printf("[INFO] %s: added %d broadcast ephemerides, GPS/QZSS CNAV/CNV2=%d\n",
                input[i],nav.n-before,file_cnav);
     }
 
-    printf("[INFO] Total broadcast ephemerides=%d, GPS CNAV/CNV2=%d\n",
+    printf("[INFO] Total broadcast ephemerides=%d, GPS/QZSS CNAV/CNV2=%d\n",
            nav.n,total_cnav);
 
     if (total_cnav==0) {
         fprintf(stderr,
-            "[ERROR] No GPS CNAV/CNV2 ephemeris records were found. "
+            "[ERROR] No GPS/QZSS CNAV/CNV2 ephemeris records were found. "
             "For RINEX 4, records must have message type CNAV or CNV2.\n");
         freenav(&nav,0x3FF);
         freeobs(&obs);
@@ -120,16 +142,16 @@ int main(int argc, char **argv)
 
     cnav=(cnav_ref_t *)malloc(sizeof(*cnav)*(size_t)total_cnav);
     if (!cnav) {
-        fprintf(stderr,"[ERROR] Cannot allocate GPS CNAV sort buffer\n");
+        fprintf(stderr,"[ERROR] Cannot allocate GPS/QZSS CNAV sort buffer\n");
         freenav(&nav,0x3FF);
         freeobs(&obs);
         return 3;
     }
 
     for (i=0;i<nav.n;i++) {
-        if (!is_gps_cnav(&nav.eph[i])) continue;
+        if (!is_unicore_gpscnav(&nav.eph[i])) continue;
         if (cnav_count>=total_cnav) {
-            fprintf(stderr,"[ERROR] Internal GPS CNAV count mismatch\n");
+            fprintf(stderr,"[ERROR] Internal GPS/QZSS CNAV count mismatch\n");
             free(cnav);
             freenav(&nav,0x3FF);
             freeobs(&obs);
@@ -142,7 +164,7 @@ int main(int argc, char **argv)
 
     if (cnav_count!=total_cnav) {
         fprintf(stderr,
-            "[ERROR] Internal GPS CNAV count mismatch: expected %d, collected %d\n",
+            "[ERROR] Internal GPS/QZSS CNAV count mismatch: expected %d, collected %d\n",
             total_cnav,cnav_count);
         free(cnav);
         freenav(&nav,0x3FF);
@@ -151,7 +173,7 @@ int main(int argc, char **argv)
     }
 
     qsort(cnav,(size_t)cnav_count,sizeof(*cnav),compare_cnav_ref);
-    printf("[INFO] Sorted %d GPS CNAV/CNV2 records by transmission time (ttr)\n",
+    printf("[INFO] Sorted %d GPS/QZSS CNAV/CNV2 records by transmission time (ttr)\n",
            cnav_count);
 
     fp=fopen(output,"w");
@@ -182,7 +204,7 @@ int main(int argc, char **argv)
     freeobs(&obs);
 
     if (written==0) {
-        fprintf(stderr,"[ERROR] GPS CNAV/CNV2 records were parsed but none were written.\n");
+        fprintf(stderr,"[ERROR] GPS/QZSS CNAV/CNV2 records were parsed but none were written.\n");
         return 7;
     }
     return 0;
