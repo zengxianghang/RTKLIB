@@ -1319,9 +1319,14 @@ static int decode_rnx4_eph(double ver, int sat, gtime_t toc, const double *data,
     
     return 1;
 }
-/* decode glonass ephemeris --------------------------------------------------*/
+/* decode glonass ephemeris --------------------------------------------------
+* ndata is the number of data fields read for the record: 15 up to RINEX 3.04,
+* 19 for RINEX 3.05 and RINEX 4 (BROADCAST ORBIT 4: status flags, L1/L2 group
+* delay difference, URAI, health flags).  The orbit-4 fields are decoded only
+* when present; otherwise they keep their zero defaults.
+*---------------------------------------------------------------------------*/
 static int decode_geph(double ver, int sat, gtime_t toc, double *data,
-                       geph_t *geph)
+                       int ndata, geph_t *geph)
 {
     geph_t geph0={0};
     gtime_t tof;
@@ -1365,11 +1370,13 @@ static int decode_geph(double ver, int sat, gtime_t toc, double *data,
     geph->frq=(int)data[10];
     geph->age=(int)data[14];
     
-    //rinex4
-    geph->flag=(int)data[15];
-    geph->dtaun=data[16];
-    geph->sva=(int)data[17];
-    geph->svhflag=(int)data[18];
+    /* RINEX 3.05/4 BROADCAST ORBIT 4 */
+    if (ndata>=19) {
+        geph->flag=(int)data[15];
+        geph->dtaun=data[16];
+        geph->sva=(int)data[17];
+        geph->svhflag=(int)data[18];
+    }
     
     /* some receiver output >128 for minus frequency number */
     if (geph->frq>128) geph->frq-=256;
@@ -1835,10 +1842,10 @@ static int readephbody(FILE *fp, const char *opt, double ver, int sys,
                 data[i++]=str2num(p,0,19);
             }
             /* decode ephemeris */
-            if (sys==SYS_GLO&&i>=15) {
+            if (sys==SYS_GLO&&i>=(ver>=3.05?19:15)) {
                 if (!(mask&sys)) return 0;
                 *type=1;
-                return decode_geph(ver,sat,toc,data,geph);
+                return decode_geph(ver,sat,toc,data,i,geph);
             }
             else if (sys==SYS_SBS&&i>=15) {
                 if (!(mask&sys)) return 0;
@@ -1911,7 +1918,7 @@ static int readrnx4ephbody(FILE *fp, const char *opt, double ver, int sys,
                 if (hdr->msg_type==NAV_L1OC||hdr->msg_type==NAV_L3OC) {
                     return decode_rnx4_geph(sat,toc,data,hdr,geph);
                 }
-                return decode_geph(ver,sat,toc,data,geph);
+                return decode_geph(ver,sat,toc,data,i,geph);
             }
             else if (sys==SYS_SBS&&i>=15) {
                 if (!(mask&sys)) return 0;
@@ -2334,10 +2341,10 @@ static int readrnxnavb(FILE *fp, const char *opt, double ver, int sys,
                 data[i++]=str2num(p,0,19);
             }
             /* decode ephemeris */
-            if (sys==SYS_GLO&&i>=15) {
+            if (sys==SYS_GLO&&i>=(ver>=3.05?19:15)) {
                 if (!(mask&sys)) return 0;
                 *type=1;
-                return decode_geph(ver,sat,toc,data,geph);
+                return decode_geph(ver,sat,toc,data,i,geph);
             }
             else if (sys==SYS_SBS&&i>=15) {
                 if (!(mask&sys)) return 0;
