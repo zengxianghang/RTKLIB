@@ -99,17 +99,19 @@ jobs:
         working-directory: app/rnx2unicore
         run: rnx2unicore.exe -h
 
-      - name: Functional test GPS CNAV conversion
+      - name: Functional test GPS/QZSS CNAV conversion
         shell: powershell
         working-directory: app/rnx2unicore
         run: |
           .\rnx2unicore.exe -i ..\..\tests\modern_orbit\fixtures\brd400_2024030_modern_orbit.rnx -o gpscnav_ci.log
           $lines = @(Get-Content gpscnav_ci.log)
-          if ($lines.Count -ne 6) {
-            throw "Expected 6 GPSCNAVEPHA records, got $($lines.Count)"
+          if ($lines.Count -le 6) {
+            throw "Expected GPS plus QZSS GPSCNAVEPHA records, got only $($lines.Count)"
           }
 
           $previousAbsMs = $null
+          $seenQzs34 = $false
+          $seenQzs35 = $false
           foreach ($line in $lines) {
             if (-not $line.StartsWith("#GPSCNAVEPHA,97,GPS,FINE,")) {
               throw "Unexpected Unicore ASCII header: $line"
@@ -147,6 +149,13 @@ jobs:
               throw "Expected 46 GPSCNAVEPH payload fields, got $($fields.Count): $line"
             }
 
+            $prn = [int]$fields[0]
+            if ($prn -lt 1 -or $prn -gt 42) {
+              throw "GPSCNAVEPH PRN must be in Unicore range 1..42: $line"
+            }
+            if ($prn -eq 34) { $seenQzs34 = $true }
+            if ($prn -eq 35) { $seenQzs35 = $true }
+
             for ($i = 10; $i -le 13; $i++) {
               if ([int]$fields[$i] -lt 0) {
                 throw "URAIndex must not be negative: $line"
@@ -161,4 +170,8 @@ jobs:
             if ($headerWeek -ne $payloadZWeek -or $headerMs -ne $payloadTowMs) {
               throw "Synthetic header GPST must match ephemeris ttr/TOW: $line"
             }
+          }
+
+          if (-not $seenQzs34 -or -not $seenQzs35) {
+            throw "Expected RINEX QZSS J02/J03 to map to Unicore GPSCNAVEPH PRN 34/35"
           }
