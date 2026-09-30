@@ -40,7 +40,7 @@ static int gpscnav_output_prn(const eph_t *eph, int *out_prn)
     return 1;
 }
 
-static int is_unicore_gpscnav(const eph_t *eph)
+static int is_supported_cnav(const eph_t *eph)
 {
     if (!gpscnav_output_prn(eph,NULL)) return 0;
     return eph->hdr.msg_type==NAV_CNAV || eph->hdr.msg_type==NAV_CNV2;
@@ -82,6 +82,8 @@ int main(int argc, char **argv)
     int i,j;
     int total_cnav=0;
     int written=0;
+    int written_gpscnav=0;
+    int written_gpsl1c=0;
     int cnav_count=0;
 
     for (i=1;i<argc;i++) {
@@ -121,7 +123,7 @@ int main(int argc, char **argv)
             continue;
         }
         for (j=before;j<nav.n;j++) {
-            if (is_unicore_gpscnav(&nav.eph[j])) file_cnav++;
+            if (is_supported_cnav(&nav.eph[j])) file_cnav++;
         }
         total_cnav+=file_cnav;
         printf("[INFO] %s: added %d broadcast ephemerides, GPS/QZSS CNAV/CNV2=%d\n",
@@ -149,7 +151,7 @@ int main(int argc, char **argv)
     }
 
     for (i=0;i<nav.n;i++) {
-        if (!is_unicore_gpscnav(&nav.eph[i])) continue;
+        if (!is_supported_cnav(&nav.eph[i])) continue;
         if (cnav_count>=total_cnav) {
             fprintf(stderr,"[ERROR] Internal GPS/QZSS CNAV count mismatch\n");
             free(cnav);
@@ -186,7 +188,18 @@ int main(int argc, char **argv)
     }
 
     for (i=0;i<cnav_count;i++) {
-        if (write_unicore_gpscnav_eph(fp,cnav[i].eph)) written++;
+        if (cnav[i].eph->hdr.msg_type==NAV_CNAV) {
+            if (write_unicore_gpscnav_eph(fp,cnav[i].eph)) {
+                written_gpscnav++;
+                written++;
+            }
+        }
+        else if (cnav[i].eph->hdr.msg_type==NAV_CNV2) {
+            if (write_novatel_gpsl1c_eph(fp,cnav[i].eph)) {
+                written_gpsl1c++;
+                written++;
+            }
+        }
     }
 
     if (fclose(fp)!=0) {
@@ -197,7 +210,8 @@ int main(int argc, char **argv)
         return 6;
     }
 
-    printf("[INFO] Wrote %d GPSCNAVEPHA records to %s\n",written,output);
+    printf("[INFO] Wrote %d GPSCNAVEPHA and %d GPSL1CEPHEMA records to %s\n",
+           written_gpscnav,written_gpsl1c,output);
 
     free(cnav);
     freenav(&nav,0x3FF);
@@ -206,6 +220,12 @@ int main(int argc, char **argv)
     if (written==0) {
         fprintf(stderr,"[ERROR] GPS/QZSS CNAV/CNV2 records were parsed but none were written.\n");
         return 7;
+    }
+    if (written!=cnav_count) {
+        fprintf(stderr,
+            "[ERROR] GPS/QZSS CNAV/CNV2 write count mismatch: parsed %d, wrote %d.\n",
+            cnav_count,written);
+        return 8;
     }
     return 0;
 }
