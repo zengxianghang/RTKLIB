@@ -7,7 +7,7 @@
 #define UNICORE_QZS_MIN_PRN 33
 #define UNICORE_QZS_MAX_PRN 42
 
-static unsigned int unicore_crc32(const char *buf, int len)
+static unsigned int ascii_crc32(const char *buf, int len)
 {
     unsigned int crc=0;
     int i,j;
@@ -71,6 +71,61 @@ static int gpscnav_output_prn(const eph_t *eph, int *out_prn)
     return 1;
 }
 
+static void append_gpscnav_payload(char *body, int *pos, const eph_t *eph,
+                                   int prn, int reserved0, double tow,
+                                   double toe, double toc, int week, int zweek)
+{
+    /* GPSCNAVEPH PRN namespace: GPS 1..32, QZSS 33..42.
+     * RTKLIB/RINEX QZSS PRNs 193..202 are mapped before this call. */
+    append_field(body,pos,
+        "%d,%d,%d,%d,0,0,0,0",
+        prn,
+        eph->svh,
+        0,      /* ISF */
+        reserved0);
+
+    append_field(body,pos,
+        ",%d,%d,%d,%d,%d,%d",
+        (int)eph->top,
+        (int)eph->wn_op,
+        ura_index(eph->urai_ed),
+        ura_index(eph->urai_ned[0]),
+        ura_index(eph->urai_ned[1]),
+        ura_index(eph->urai_ned[2]));
+
+    append_field(body,pos,
+        ",%d,%d,%.1f,%.1f,%.12e,%.12e,%.12e,%.12e",
+        week,zweek,tow,
+        toe,
+        eph->A-GPS_CNAV_A_REF,
+        eph->Adot,
+        eph->delta_n0,
+        eph->delta_n0_dot);
+
+    append_field(body,pos,
+        ",%.12e,%.12e,%.12e,%.12e,%.12e,%.12e,%.12e,%.12e",
+        eph->M0,eph->e,eph->omg,
+        eph->cuc,eph->cus,
+        eph->crc,eph->crs,
+        eph->cic);
+
+    append_field(body,pos,
+        ",%.12e,%.12e,%.12e,%.12e,%.12e,%.1f,%.12e",
+        eph->cis,eph->i0,eph->idot,
+        eph->OMG0,eph->OMGd,
+        toc,eph->tgd[0]);
+
+    /* Output order differs from RTKLIB isc[] order. */
+    append_field(body,pos,
+        ",%.12e,%.12e,%.12e,%.12e,%.12e,%.12e",
+        eph->isc[5],eph->isc[4],eph->isc[0],
+        eph->isc[1],eph->isc[2],eph->isc[3]);
+
+    append_field(body,pos,
+        ",%.12e,%.12e,%.12e",
+        eph->f0,eph->f1,eph->f2);
+}
+
 int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
 {
     char body[4096];
@@ -81,11 +136,10 @@ int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
     int week=0,zweek=0;
     int prn;
     int leap;
-    int reserved0;
 
     if (!fp||!eph) return 0;
     if (!gpscnav_output_prn(eph,&prn)) return 0;
-    if (eph->hdr.msg_type!=NAV_CNAV&&eph->hdr.msg_type!=NAV_CNV2) return 0;
+    if (eph->hdr.msg_type!=NAV_CNAV) return 0;
 
     tow=time2gpst(eph->ttr,&zweek);
     toe=eph->toes;
@@ -95,69 +149,53 @@ int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
     if (header_ms>=604800000U) header_ms=604799999U;
 
     /* Unicore ASCII header: Message,CPUIDle,TimeRef,TimeStatus,Wn,Ms,
-     * Res,Res,LeapSec,Res; RINEX has no receiver CPU/time-status metadata,
-     * so deterministic converter values are used for those fields. */
+     * Res,Res,LeapSec,Res. */
     pos+=sprintf(body,"#GPSCNAVEPHA,97,GPS,FINE,%d,%u,0,0,%d,0;",
                  zweek,header_ms,leap);
 
-    /* Unicore GPSCNAVEPH PRN namespace: GPS 1..32, QZSS 33..42.
-     * RTKLIB/RINEX QZSS PRNs 193..202 are mapped to 33..42 above. */
+    /* reserved[0]=1 for CNAV/L2/L5-style ephemeris. */
+    append_gpscnav_payload(body,&pos,eph,prn,1,tow,toe,toc,week,zweek);
 
-    /* reserved[0]: 1 for CNAV/L5-style ephemeris, 0 for CNAV-2/L1C.
-     * The remaining four reserved bytes are zero. */
-    reserved0=eph->hdr.msg_type==NAV_CNV2?0:1;
-    append_field(body,&pos,
-        "%d,%d,%d,%d,0,0,0,0",
-        prn,
-        eph->svh,
-        0,      /* ISF */
-        reserved0);
+    crc=ascii_crc32(body+1,pos-1);
+    fprintf(fp,"%s*%08x\n",body,crc);
+    return 1;
+}
 
-    append_field(body,&pos,
-        ",%d,%d,%d,%d,%d,%d",
-        (int)eph->top,
-        (int)eph->wn_op,
-        ura_index(eph->urai_ed),
-        ura_index(eph->urai_ned[0]),
-        ura_index(eph->urai_ned[1]),
-        ura_index(eph->urai_ned[2]));
+int write_novatel_gpsl1c_eph(FILE *fp, const eph_t *eph)
+{
+    char body[4096];
+    unsigned int crc;
+    unsigned int header_ms;
+    double tow,toe,toc,header_seconds;
+    int pos=0;
+    int week=0,zweek=0;
+    int prn;
 
-    append_field(body,&pos,
-        ",%d,%d,%.1f,%.1f,%.12e,%.12e,%.12e,%.12e",
-        week,zweek,tow,
-        toe,
-        eph->A-GPS_CNAV_A_REF,
-        eph->Adot,
-        eph->delta_n0,
-        eph->delta_n0_dot);
+    if (!fp||!eph) return 0;
+    if (!gpscnav_output_prn(eph,&prn)) return 0;
+    if (eph->hdr.msg_type!=NAV_CNV2) return 0;
 
-    append_field(body,&pos,
-        ",%.12e,%.12e,%.12e,%.12e,%.12e,%.12e,%.12e,%.12e",
-        eph->M0,eph->e,eph->omg,
-        eph->cuc,eph->cus,
-        eph->crc,eph->crs,
-        eph->cic);
+    tow=time2gpst(eph->ttr,&zweek);
+    toe=eph->toes;
+    toc=time2gpst(eph->toc,&week);
+    header_ms=(unsigned int)(tow*1000.0+0.5);
+    if (header_ms>=604800000U) header_ms=604799999U;
+    header_seconds=(double)header_ms/1000.0;
 
-    append_field(body,&pos,
-        ",%.12e,%.12e,%.12e,%.12e,%.12e,%.1f,%.12e",
-        eph->cis,eph->i0,eph->idot,
-        eph->OMG0,eph->OMGd,
-        toc,eph->tgd[0]);
+    /* NovAtel-style ASCII header:
+     * Message,Port,Sequence,IdleTime,TimeStatus,Week,Seconds,
+     * ReceiverStatus,Reserved,ReceiverSWVersion.
+     * RINEX has no receiver metadata, so deterministic zero values are used
+     * for sequence/idle/status/reserved/software-version fields. */
+    pos+=sprintf(body,
+        "#GPSL1CEPHEMA,COM1,0,0.0,FINE,%d,%.3f,0,0,0;",
+        zweek,header_seconds);
 
-    /* Unicore order differs from RTKLIB isc[] order. */
-    append_field(body,&pos,
-        ",%.12e,%.12e,%.12e,%.12e,%.12e,%.12e",
-        eph->isc[5],eph->isc[4],eph->isc[0],
-        eph->isc[1],eph->isc[2],eph->isc[3]);
+    /* GPSL1CEPHEMA body intentionally reuses the GPSCNAVEPH body layout.
+     * reserved[0]=0 identifies CNV2/L1C-style ephemeris. */
+    append_gpscnav_payload(body,&pos,eph,prn,0,tow,toe,toc,week,zweek);
 
-    /* Af2 is the final GPSCNAVEPH payload field. */
-    append_field(body,&pos,
-        ",%.12e,%.12e,%.12e",
-        eph->f0,eph->f1,eph->f2);
-
-    crc=unicore_crc32(body+1,pos-1);
-
-    /* Use '\n' with a text-mode stream. MSVC translates it to CRLF once. */
+    crc=ascii_crc32(body+1,pos-1);
     fprintf(fp,"%s*%08x\n",body,crc);
     return 1;
 }
