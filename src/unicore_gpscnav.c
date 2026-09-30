@@ -4,6 +4,8 @@
 #include <string.h>
 
 #define GPS_CNAV_A_REF 26559710.0
+#define UNICORE_QZS_MIN_PRN 33
+#define UNICORE_QZS_MAX_PRN 42
 
 static unsigned int unicore_crc32(const char *buf, int len)
 {
@@ -48,6 +50,27 @@ static int gps_leap_seconds(gtime_t gpst)
     return leap>0?leap:0;
 }
 
+static int gpscnav_output_prn(const eph_t *eph, int *out_prn)
+{
+    int sys,prn,mapped_prn;
+
+    if (!eph) return 0;
+
+    sys=satsys(eph->sat,&prn);
+    if (sys==SYS_GPS && prn>=MINPRNGPS && prn<=MAXPRNGPS) {
+        mapped_prn=prn;
+    }
+    else if (sys==SYS_QZS && prn>=MINPRNQZS && prn<=MAXPRNQZS) {
+        mapped_prn=UNICORE_QZS_MIN_PRN+(prn-MINPRNQZS);
+        if (mapped_prn>UNICORE_QZS_MAX_PRN) return 0;
+    }
+    else {
+        return 0;
+    }
+    if (out_prn) *out_prn=mapped_prn;
+    return 1;
+}
+
 int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
 {
     char body[4096];
@@ -56,14 +79,12 @@ int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
     double tow,toe,toc;
     int pos=0;
     int week=0,zweek=0;
-    int sys,prn;
+    int prn;
     int leap;
     int reserved0;
 
     if (!fp||!eph) return 0;
-
-    sys=satsys(eph->sat,&prn);
-    if (sys!=SYS_GPS) return 0;
+    if (!gpscnav_output_prn(eph,&prn)) return 0;
     if (eph->hdr.msg_type!=NAV_CNAV&&eph->hdr.msg_type!=NAV_CNV2) return 0;
 
     tow=time2gpst(eph->ttr,&zweek);
@@ -78,6 +99,9 @@ int write_unicore_gpscnav_eph(FILE *fp, const eph_t *eph)
      * so deterministic converter values are used for those fields. */
     pos+=sprintf(body,"#GPSCNAVEPHA,97,GPS,FINE,%d,%u,0,0,%d,0;",
                  zweek,header_ms,leap);
+
+    /* Unicore GPSCNAVEPH PRN namespace: GPS 1..32, QZSS 33..42.
+     * RTKLIB/RINEX QZSS PRNs 193..202 are mapped to 33..42 above. */
 
     /* reserved[0]: 1 for CNAV/L5-style ephemeris, 0 for CNAV-2/L1C.
      * The remaining four reserved bytes are zero. */
