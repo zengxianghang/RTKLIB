@@ -1182,6 +1182,134 @@ static int check_stateless_equivalence(const nav_t *nav)
     return 0;
 }
 
+static int internal_system(uint32_t system)
+{
+    switch (system) {
+    case RTKLIB_SHARED_SYS_GPS: return SYS_GPS;
+    case RTKLIB_SHARED_SYS_GLO: return SYS_GLO;
+    case RTKLIB_SHARED_SYS_GAL: return SYS_GAL;
+    case RTKLIB_SHARED_SYS_BDS: return SYS_CMP;
+    case RTKLIB_SHARED_SYS_QZS: return SYS_QZS;
+    default: return SYS_NONE;
+    }
+}
+
+/* ABI 1.5: with RTKLIB_SHARED_EVAL_CHECK_AGE a stateless evaluation is
+ * available exactly when the shared default selection, given only that
+ * record, selects it at the same selection time: the same age limit. */
+static int check_stateless_age_one(const rtklib_shared_eph_input_t *eph,
+                                   const rtklib_shared_glo_eph_input_t *geph,
+                                   size_t *checked, size_t *records)
+{
+    static const double margins[] = {
+        -1.5, -0.5, -1E-3, 0.0, 1E-3, 0.5, 1.5
+    };
+    rtklib_shared_nav_store_t *store = rtklib_shared_nav_create();
+    rtklib_shared_record_identity_t identity;
+    rtklib_shared_record_id_t id;
+    rtklib_shared_state_query_t query;
+    rtklib_shared_state_result_t selected, stateless;
+    rtklib_shared_bias_result_t bias;
+    double limit, offset;
+    int code, found = 0, sign, stat_selected, stat_stateless;
+    size_t k;
+
+    CHECK(store != NULL, "age check store allocation failed");
+    CHECK((eph ? rtklib_shared_nav_insert_eph(store, eph, &id) :
+                 rtklib_shared_nav_insert_glo_eph(store, geph, &id)) ==
+              RTKLIB_SHARED_OK, "age check insert failed");
+    init_identity(&identity);
+    CHECK(rtklib_shared_nav_record(store, id, &identity) == RTKLIB_SHARED_OK,
+          "age check record has no identity");
+    limit = rtklib_signal_max_eph_age_ext(internal_system(identity.system));
+    /* A code the record serves at toe. */
+    for (code = 1; code <= MAXCODE && !found; code++) {
+        init_state_query(&query, identity.system, identity.prn,
+                         identity.family, (unsigned char)code, identity.toe, 0);
+        query.glonass_fcn = identity.glonass_fcn;
+        init_state_result(&stateless);
+        found = (eph ? rtklib_shared_state_eval_eph(eph, &query, &stateless) :
+                 rtklib_shared_state_eval_glo_eph(geph, &query, &stateless)) ==
+                RTKLIB_SHARED_OK;
+    }
+    if (!found) {
+        /* A record no code can evaluate has no availability to compare. */
+        rtklib_shared_nav_destroy(store);
+        return 0;
+    }
+    code--;
+    for (sign = -1; sign <= 1; sign += 2) {
+        for (k = 0; k < sizeof(margins) / sizeof(margins[0]); k++) {
+            offset = sign * (limit + margins[k]);
+            init_state_query(&query, identity.system, identity.prn,
+                             identity.family, (unsigned char)code,
+                             shifted_time(identity.toe, offset), 0);
+            query.glonass_fcn = identity.glonass_fcn;
+            init_state_result(&selected);
+            stat_selected = rtklib_shared_state_query(store, &query, &selected);
+            query.reserved[1] = RTKLIB_SHARED_EVAL_CHECK_AGE;
+            init_state_result(&stateless);
+            stat_stateless = eph ?
+                rtklib_shared_state_eval_eph(eph, &query, &stateless) :
+                rtklib_shared_state_eval_glo_eph(geph, &query, &stateless);
+            CHECK(stat_stateless == stat_selected &&
+                  stateless.status == selected.status,
+                  "stateless age check differs from the default selection");
+            CHECK(stateless.identity.receive_order == identity.receive_order,
+                  "expired stateless evaluation lost the record identity");
+            if (stat_selected == RTKLIB_SHARED_OK) {
+                stateless.identity.record_id = selected.identity.record_id;
+                CHECK(identical_state(&stateless, &selected),
+                      "age-checked stateless state differs from the selection");
+            } else {
+                CHECK(stat_selected == RTKLIB_SHARED_UNAVAILABLE &&
+                      !stateless.state_valid,
+                      "expired record was not UNAVAILABLE");
+            }
+            init_bias_result(&bias);
+            CHECK((eph ? rtklib_shared_bias_eval_eph(eph, &query, &bias) :
+                   rtklib_shared_bias_eval_glo_eph(geph, &query, &bias)) ==
+                      RTKLIB_SHARED_UNAVAILABLE ||
+                  stat_selected == RTKLIB_SHARED_OK,
+                  "expired record served a bias");
+            (*checked)++;
+        }
+    }
+    (*records)++;
+    /* Only RTKLIB_SHARED_EVAL_CHECK_AGE is a valid flag. */
+    query.reserved[1] = 2;
+    init_state_result(&stateless);
+    CHECK((eph ? rtklib_shared_state_eval_eph(eph, &query, &stateless) :
+           rtklib_shared_state_eval_glo_eph(geph, &query, &stateless)) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "an unknown stateless flag was accepted");
+    rtklib_shared_nav_destroy(store);
+    return 0;
+}
+
+static int check_stateless_age(const nav_t *nav)
+{
+    rtklib_shared_eph_input_t eph;
+    rtklib_shared_glo_eph_input_t geph;
+    size_t checked = 0, records = 0;
+    int i;
+
+    for (i = 0; i < nav->n; i++) {
+        fill_eph_input(&nav->eph[i], &eph);
+        CHECK(check_stateless_age_one(&eph, NULL, &checked, &records) == 0,
+              "stateless age check failed for an ephemeris");
+    }
+    for (i = 0; i < nav->ng; i++) {
+        fill_glo_input(&nav->geph[i], &geph);
+        CHECK(check_stateless_age_one(NULL, &geph, &checked, &records) == 0,
+              "stateless age check failed for a GLONASS ephemeris");
+    }
+    CHECK(records >= 15, "too few records exercise the stateless age check");
+    printf("PASS stateless age records=%zu/%d checks=%zu\n", records,
+           nav->n + nav->ng, checked);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] :
@@ -1956,6 +2084,8 @@ int main(int argc, char **argv)
 
     CHECK(check_stateless_equivalence(&private_nav) == 0,
           "stateless evaluation is not equivalent to the store query");
+    CHECK(check_stateless_age(&private_nav) == 0,
+          "stateless age check is not the default selection's");
 
     /* Week 3551 overflows gpst2time()/bdt2time()'s historical int product on
      * this RTKLIB build.  Reject it at the public boundary rather than

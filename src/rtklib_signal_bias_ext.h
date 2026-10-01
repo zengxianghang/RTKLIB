@@ -54,6 +54,8 @@ int rtklib_signal_code_bias_selected_ext(int system, int message_type,
 int rtklib_signal_code_supported_ext(int system, int message_type,
                                      unsigned char code);
 int rtklib_signal_family_mask_ext(int system, unsigned char code);
+/* Age limit (s) of the signal selectors for a broadcast record of system. */
+double rtklib_signal_max_eph_age_ext(int system);
 
 /* Select an existing nav record and return its private-array index.  The
  * caller can then bind several operations to that exact record.  required_fcn
