@@ -1276,8 +1276,9 @@ static int check_stateless_age_one(const rtklib_shared_eph_input_t *eph,
         }
     }
     (*records)++;
-    /* Only RTKLIB_SHARED_EVAL_CHECK_AGE and _CROSS_FAMILY are flags. */
-    query.reserved[1] = 4;
+    /* Only RTKLIB_SHARED_EVAL_CHECK_AGE, _CROSS_FAMILY and _SYSTEM_WIDE are
+     * flags. */
+    query.reserved[1] = 8;
     init_state_result(&stateless);
     CHECK((eph ? rtklib_shared_state_eval_eph(eph, &query, &stateless) :
            rtklib_shared_state_eval_glo_eph(geph, &query, &stateless)) ==
@@ -1446,6 +1447,320 @@ static int check_stateless_cross_family(const nav_t *nav)
           "the cross-family scope was not exercised");
     printf("PASS stateless cross-family in_scope=%zu out_of_scope=%zu\n",
            in_scope, out_of_scope);
+    return 0;
+}
+
+/* ABI 1.7 system-wide families, listed independently of the implementation. */
+static int expected_system_wide_families(int system)
+{
+    if (system == SYS_GPS || system == SYS_QZS)
+        return NAV_LNAV | NAV_CNAV | NAV_CNV2;
+    if (system == SYS_CMP)
+        return NAV_D1 | NAV_D2 | NAV_D1D2 | NAV_CNV1 | NAV_CNV2 | NAV_CNV3;
+    return 0;
+}
+
+static int bds_geo_prn(uint32_t prn) { return prn <= 5 || prn >= 59; }
+
+/* The RINEX 4.02 BDS codes continue past MAXCODE (rtklib_obs_ext.h). */
+#define MAX_EXT_CODE CODE_L1D
+
+/* ABI 1.7 RTKLIB_SHARED_EVAL_SYSTEM_WIDE: the ABI 1.6 combinations are
+ * unchanged, every other code of the system's families is served with the
+ * record's own state and the frozen bias and health rules. */
+static int check_stateless_system_wide(const nav_t *nav)
+{
+    const double gamma2 = (FREQ1 / FREQ2) * (FREQ1 / FREQ2);
+    const double gamma5 = (FREQ1 / FREQ5) * (FREQ1 / FREQ5);
+    rtklib_shared_eph_input_t eph;
+    rtklib_shared_state_query_t query;
+    rtklib_shared_state_result_t own, v16, wide;
+    rtklib_shared_bias_result_t b16, bwide;
+    size_t added = 0, unchanged = 0, contained = 0;
+    int i, code, own_code, system, family, mask, families, j, stat;
+
+    for (i = 0; i < nav->n; i++) {
+        const eph_t *e = &nav->eph[i];
+        fill_eph_input(e, &eph);
+        system = internal_system(eph.system);
+        family = (int)eph.family;
+        families = expected_system_wide_families(system);
+        own_code = 0;
+        for (code = 1; code <= MAX_EXT_CODE && !own_code; code++) {
+            init_state_query(&query, eph.system, eph.prn, eph.family,
+                             (unsigned char)code, eph.toe, 0);
+            init_state_result(&own);
+            if (rtklib_shared_state_eval_eph(&eph, &query, &own) ==
+                RTKLIB_SHARED_OK) own_code = code;
+        }
+        for (code = 1; code <= MAX_EXT_CODE; code++) {
+            mask = rtklib_signal_family_mask_ext(system, (unsigned char)code);
+            if (!mask || !(mask & ~family)) continue;
+            init_state_query(&query, eph.system, eph.prn,
+                             (uint32_t)(mask & ~family), (unsigned char)code,
+                             eph.toe, 0);
+            query.reserved[1] = RTKLIB_SHARED_EVAL_CROSS_FAMILY;
+            init_state_result(&v16);
+            rtklib_shared_state_eval_eph(&eph, &query, &v16);
+            init_bias_result(&b16);
+            rtklib_shared_bias_eval_eph(&eph, &query, &b16);
+            /* SYSTEM_WIDE alone implies the cross-family flag. */
+            query.reserved[1] = RTKLIB_SHARED_EVAL_SYSTEM_WIDE;
+            init_state_result(&wide);
+            stat = rtklib_shared_state_eval_eph(&eph, &query, &wide);
+            init_bias_result(&bwide);
+            rtklib_shared_bias_eval_eph(&eph, &query, &bwide);
+            if (expected_cross_scope(system, family, (unsigned char)code) ||
+                !(family & families) || !(mask & families)) {
+                CHECK(identical_state(&wide, &v16) &&
+                      wide.status == v16.status &&
+                      same_bits(bwide.raw_code_bias_m, b16.raw_code_bias_m) &&
+                      bwide.status == b16.status &&
+                      bwide.bias_flags == b16.bias_flags,
+                      "SYSTEM_WIDE changed an ABI 1.6 combination");
+                unchanged++;
+                continue;
+            }
+            if (system == SYS_CMP && bds_geo_prn(eph.prn) &&
+                (family & (NAV_CNV1 | NAV_CNV2 | NAV_CNV3))) {
+                CHECK(stat == RTKLIB_SHARED_UNSUPPORTED && !wide.state_valid,
+                      "a GEO B-CNAV state escaped its containment");
+                contained++;
+                continue;
+            }
+            CHECK(own_code && stat == RTKLIB_SHARED_OK && wide.state_valid,
+                  "a system-wide state failed");
+            for (j = 0; j < 3; j++) {
+                CHECK(same_bits(wide.position_ecef_m[j], own.position_ecef_m[j]) &&
+                      same_bits(wide.velocity_ecef_mps[j], own.velocity_ecef_mps[j]),
+                      "system-wide state differs from the record's own");
+            }
+            CHECK(same_bits(wide.clock_bias_s, own.clock_bias_s) &&
+                  wide.eval_flags == (RTKLIB_SHARED_RESULT_CROSS_FAMILY |
+                      RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE) &&
+                  wide.health == RTKLIB_SHARED_HEALTH_UNKNOWN,
+                  "system-wide clock, flags or health differ");
+            if (system == SYS_CMP) {
+                if (code == CODE_L6I || code == CODE_L6Q || code == CODE_L6X) {
+                    CHECK(bwide.status == RTKLIB_SHARED_QUERY_AVAILABLE &&
+                          bwide.raw_code_bias_m == 0.0 &&
+                          bwide.bias_flags == RTKLIB_SHARED_BIAS_CROSS_FAMILY,
+                          "a B-CNAV record's B3I bias is not zero");
+                } else {
+                    CHECK(bwide.status == RTKLIB_SHARED_QUERY_UNSUPPORTED &&
+                          bwide.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                              RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING),
+                          "a BDS group delay was not reported missing");
+                }
+            } else {
+                double expected;
+                uint32_t flags = RTKLIB_SHARED_BIAS_CROSS_FAMILY;
+                char band = code2obs((unsigned char)code, NULL)[0];
+                if (code == CODE_L1P || code == CODE_L1W || code == CODE_L1Y)
+                    expected = CLIGHT * e->tgd[0];
+                else if (code == CODE_L2P || code == CODE_L2W ||
+                         code == CODE_L2Y || code == CODE_L2D)
+                    expected = CLIGHT * gamma2 * e->tgd[0];
+                else {
+                    expected = CLIGHT * e->tgd[0] *
+                        (band == '2' ? gamma2 : band == '5' ? gamma5 : 1.0);
+                    flags |= RTKLIB_SHARED_BIAS_ISC_MISSING;
+                }
+                CHECK(bwide.status == RTKLIB_SHARED_QUERY_AVAILABLE &&
+                      bwide.bias_flags == flags &&
+                      fabs(bwide.raw_code_bias_m - expected) <= 1E-12,
+                      "system-wide GPS/QZSS bias differs from the frozen rule");
+            }
+            added++;
+        }
+    }
+    CHECK(added >= 10 && unchanged > 0 && contained == 0,
+          "the system-wide scope was not exercised");
+    printf("PASS stateless system-wide added=%zu unchanged=%zu\n", added,
+           unchanged);
+    return 0;
+}
+
+static const eph_t *find_eph(const nav_t *nav, int system, int prn,
+                             int family, int nth)
+{
+    int i, sys, p;
+    for (i = 0; i < nav->n; i++) {
+        sys = satsys(nav->eph[i].sat, &p);
+        if (sys == system && p == prn && nav->eph[i].hdr.msg_type == family &&
+            nth-- == 0) return &nav->eph[i];
+    }
+    return NULL;
+}
+
+static int set_bias(const rtklib_shared_eph_input_t *active,
+                    const rtklib_shared_eph_input_t *records, uint32_t count,
+                    unsigned char code, uint32_t flags,
+                    rtklib_shared_bias_result_t *result)
+{
+    rtklib_shared_state_query_t query;
+    int system = internal_system(active->system);
+    init_state_query(&query, active->system, active->prn,
+                     (uint32_t)rtklib_signal_family_mask_ext(system, code), code,
+                     active->toe, 0);
+    query.reserved[1] = (uint8_t)flags;
+    init_bias_result(result);
+    return rtklib_shared_bias_eval_eph_set(active, records, count, &query,
+                                           result);
+}
+
+/* ABI 1.7 rtklib_shared_bias_eval_eph_set: own-family code bias from the
+ * group-delay records. */
+static int check_group_delay_records(const nav_t *nav)
+{
+    const uint32_t wide = RTKLIB_SHARED_EVAL_SYSTEM_WIDE;
+    const eph_t *g_lnav = find_eph(nav, SYS_GPS, 1, NAV_LNAV, 0);
+    const eph_t *g_cnav = find_eph(nav, SYS_GPS, 1, NAV_CNAV, 0);
+    const eph_t *c_cnv1 = find_eph(nav, SYS_CMP, 19, NAV_CNV1, 0);
+    const eph_t *c_cnv3 = find_eph(nav, SYS_CMP, 19, NAV_CNV3, 0);
+    const eph_t *c_d1 = find_eph(nav, SYS_CMP, 6, NAV_D1, 0);
+    const eph_t *e_inav = find_eph(nav, SYS_GAL, 2, NAV_INAV, 0);
+    const eph_t *e_fnav = find_eph(nav, SYS_GAL, 2, NAV_FNAV, 0);
+    rtklib_shared_eph_input_t lnav, cnav, cnv1, cnv3, d1, inav, fnav;
+    rtklib_shared_eph_input_t records[3];
+    rtklib_shared_bias_result_t result, single;
+    rtklib_shared_state_query_t query;
+
+    CHECK(g_lnav && g_cnav && c_cnv1 && c_cnv3 && c_d1 && e_inav && e_fnav,
+          "group-delay fixture records are missing");
+    fill_eph_input(g_lnav, &lnav);
+    fill_eph_input(g_cnav, &cnav);
+    fill_eph_input(c_cnv1, &cnv1);
+    fill_eph_input(c_cnv3, &cnv3);
+    fill_eph_input(c_d1, &d1);
+    fill_eph_input(e_inav, &inav);
+    fill_eph_input(e_fnav, &fnav);
+    lnav.receive_order = 10; cnav.receive_order = 20;
+    cnv1.receive_order = 10; cnv3.receive_order = 20;
+    /* A D1 record of C19, the receive order after both B-CNAV records. */
+    d1.prn = 19; d1.receive_order = 30;
+
+    /* LNAV active, CNAV group delays: L5Q and L2L take T_GD - ISC exactly. */
+    CHECK(set_bias(&lnav, &cnav, 1, CODE_L5Q, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          result.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                                RTKLIB_SHARED_BIAS_GROUP_DELAY_RECORD) &&
+          result.identity.receive_order == 20 &&
+          result.identity.family == NAV_CNAV &&
+          fabs(result.raw_code_bias_m -
+               CLIGHT * (g_cnav->tgd[0] - g_cnav->isc[3])) <= 1E-12,
+          "L5Q did not take the CNAV record's T_GD - ISC");
+    CHECK(set_bias(&lnav, &cnav, 1, CODE_L2L, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          fabs(result.raw_code_bias_m -
+               CLIGHT * (g_cnav->tgd[0] - g_cnav->isc[1])) <= 1E-12,
+          "L2L did not take the CNAV record's T_GD - ISC");
+    /* L5X has no single ISC term: the active record's scaled T_GD stays. */
+    CHECK(set_bias(&lnav, &cnav, 1, CODE_L5X, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          result.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                                RTKLIB_SHARED_BIAS_ISC_MISSING) &&
+          result.identity.receive_order == 10,
+          "L5X did not keep the active record's cross-family rule");
+    /* An own-family code ignores the group-delay records. */
+    init_state_query(&query, lnav.system, lnav.prn, NAV_LNAV | NAV_CNAV |
+                     NAV_CNV2, CODE_L1C, lnav.toe, 0);
+    init_bias_result(&single);
+    rtklib_shared_bias_eval_eph(&lnav, &query, &single);
+    CHECK(set_bias(&lnav, &cnav, 1, CODE_L1C, wide, &result) ==
+              RTKLIB_SHARED_OK && result.bias_flags == 0 &&
+          same_bits(result.raw_code_bias_m, single.raw_code_bias_m) &&
+          result.identity.receive_order == 10,
+          "an own-family code used a group-delay record");
+    /* CNAV active, LNAV group delays: L2W takes LNAV's gamma*T_GD. */
+    CHECK(set_bias(&cnav, &lnav, 1, CODE_L2W, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          result.identity.family == NAV_LNAV &&
+          fabs(result.raw_code_bias_m - CLIGHT * (FREQ1 / FREQ2) *
+               (FREQ1 / FREQ2) * g_lnav->tgd[0]) <= 1E-12,
+          "L2W did not take the LNAV record's gamma*T_GD");
+    /* Without SYSTEM_WIDE a CNAV record does not serve L2W at all. */
+    CHECK(set_bias(&cnav, &lnav, 1, CODE_L2W,
+                   RTKLIB_SHARED_EVAL_CROSS_FAMILY, &result) ==
+              RTKLIB_SHARED_UNSUPPORTED,
+          "a CNAV record served L2W without SYSTEM_WIDE");
+    /* Age: a group-delay record outside the limit is not used. */
+    records[0] = cnav;
+    records[0].toe.sow = fmod(records[0].toe.sow + 302400.0, 604800.0);
+    records[0].toe.week += records[0].toe.sow < cnav.toe.sow ? 1 : 0;
+    records[0].toc = records[0].toe;
+    records[0].broadcast_toe_sow = records[0].toe.sow;
+    records[0].broadcast_week = records[0].toe.week;
+    records[0].transmit_time = records[0].toe;
+    records[0].broadcast_transmit_sow = records[0].toe.sow;
+    CHECK(set_bias(&lnav, records, 1, CODE_L5Q, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          result.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                                RTKLIB_SHARED_BIAS_GROUP_DELAY_RECORD),
+          "the shifted group-delay record was rejected without the age check");
+    CHECK(set_bias(&lnav, records, 1, CODE_L5Q,
+                   wide | RTKLIB_SHARED_EVAL_CHECK_AGE, &result) ==
+              RTKLIB_SHARED_OK &&
+          result.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                                RTKLIB_SHARED_BIAS_ISC_MISSING),
+          "an expired group-delay record was used");
+    /* The largest receive order wins; on a tie the first record. */
+    records[0] = cnav; records[1] = cnav;
+    records[1].receive_order = 25; records[1].isc_s[3] = 1E-9;
+    CHECK(set_bias(&lnav, records, 2, CODE_L5Q, wide, &result) ==
+              RTKLIB_SHARED_OK && result.identity.receive_order == 25 &&
+          fabs(result.raw_code_bias_m - CLIGHT * (g_cnav->tgd[0] - 1E-9)) <=
+              1E-12,
+          "the latest group-delay record was not chosen");
+    records[1].receive_order = 20;
+    CHECK(set_bias(&lnav, records, 2, CODE_L5Q, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          fabs(result.raw_code_bias_m -
+               CLIGHT * (g_cnav->tgd[0] - g_cnav->isc[3])) <= 1E-12,
+          "a receive-order tie did not keep the first record");
+    /* BDS: B-CNAV1 active, B-CNAV3 group delays serve B2b; D1 serves B1I. */
+    records[0] = cnv3; records[1] = d1;
+    CHECK(set_bias(&cnv1, records, 2, CODE_L7D, wide, &result) ==
+              RTKLIB_SHARED_OK && result.identity.family == NAV_CNV3 &&
+          fabs(result.raw_code_bias_m - CLIGHT * c_cnv3->tgd[0]) <= 1E-12,
+          "B2b did not take the B-CNAV3 record's TGD");
+    CHECK(set_bias(&cnv1, records, 2, CODE_L2I, wide, &result) ==
+              RTKLIB_SHARED_OK && result.identity.family == NAV_D1 &&
+          fabs(result.raw_code_bias_m - CLIGHT * c_d1->tgd[0]) <= 1E-12,
+          "B1I did not take the D1 record's TGD1");
+    CHECK(set_bias(&cnv1, &cnv3, 1, CODE_L2I, wide, &result) ==
+              RTKLIB_SHARED_UNSUPPORTED &&
+          result.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                                RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING),
+          "B1I without a D1/D2 record was not reported missing");
+    /* Galileo clocks differ by family: group-delay records are not used. */
+    init_state_query(&query, inav.system, inav.prn,
+                     (uint32_t)rtklib_signal_family_mask_ext(SYS_GAL, CODE_L5Q),
+                     CODE_L5Q, inav.toe, 0);
+    query.reserved[1] = RTKLIB_SHARED_EVAL_CROSS_FAMILY;
+    init_bias_result(&single);
+    rtklib_shared_bias_eval_eph(&inav, &query, &single);
+    CHECK(set_bias(&inav, &fnav, 1, CODE_L5Q, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          same_bits(result.raw_code_bias_m, single.raw_code_bias_m) &&
+          result.bias_flags == single.bias_flags,
+          "a Galileo group-delay record was used");
+    /* Invalid arguments: another satellite, a missing array, ABI 1.6. */
+    records[0] = cnav; records[0].prn = 2;
+    CHECK(set_bias(&lnav, records, 1, CODE_L5Q, wide, &result) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "a record of another satellite was accepted");
+    CHECK(set_bias(&lnav, NULL, 1, CODE_L5Q, wide, &result) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "a missing record array was accepted");
+    init_state_query(&query, lnav.system, lnav.prn, NAV_CNAV | NAV_CNV2,
+                     CODE_L5Q, lnav.toe, 0);
+    init_bias_result(&result);
+    result.abi_version = (RTKLIB_SHARED_ABI_MAJOR << 16) | 6u;
+    CHECK(rtklib_shared_bias_eval_eph_set(&lnav, &cnav, 1, &query, &result) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "an ABI 1.6 result was accepted");
+    printf("PASS group-delay records\n");
     return 0;
 }
 
@@ -2227,6 +2542,10 @@ int main(int argc, char **argv)
           "stateless age check is not the default selection's");
     CHECK(check_stateless_cross_family(&private_nav) == 0,
           "stateless cross-family evaluation is not the frozen scope");
+    CHECK(check_stateless_system_wide(&private_nav) == 0,
+          "stateless system-wide evaluation is not the frozen scope");
+    CHECK(check_group_delay_records(&private_nav) == 0,
+          "group-delay records are not used as frozen");
 
     /* Week 3551 overflows gpst2time()/bdt2time()'s historical int product on
      * this RTKLIB build.  Reject it at the public boundary rather than

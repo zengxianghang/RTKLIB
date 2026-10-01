@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define RTKLIB_SHARED_ABI_MAJOR 1u
-#define RTKLIB_SHARED_ABI_MINOR 6u
+#define RTKLIB_SHARED_ABI_MINOR 7u
 #define RTKLIB_SHARED_ABI_VERSION \
     ((RTKLIB_SHARED_ABI_MAJOR << 16) | RTKLIB_SHARED_ABI_MINOR)
 /* Every ABI 1.x POD keeps the 1.0 layout and size.  A caller may keep
@@ -291,8 +291,9 @@ typedef struct {
      * source-kind filter.  0 keeps the ABI 1.0 unrestricted selector;
      * RTKLIB_SHARED_SOURCE_RINEX / _RECEIVER restrict candidates before
      * the existing family, age and tie-break rules.  Explicit IDs ignore
-     * this filter.  Stateless evaluation (ABI 1.5): reserved[1] is
-     * RTKLIB_SHARED_EVAL_CHECK_AGE or 0, see rtklib_shared_state_eval_eph.
+     * this filter.  Stateless evaluation: reserved[1] holds the
+     * RTKLIB_SHARED_EVAL_* flags (CHECK_AGE 1.5, CROSS_FAMILY 1.6,
+     * SYSTEM_WIDE 1.7), see rtklib_shared_state_eval_eph.
      * reserved[2..31] remain zero for forward compatibility. */
     uint8_t reserved[32];
 } rtklib_shared_state_query_t;
@@ -334,6 +335,26 @@ typedef struct {
 #define RTKLIB_SHARED_BIAS_CROSS_FAMILY 1u
 #define RTKLIB_SHARED_BIAS_ISC_MISSING 2u
 #define RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING 4u
+
+/* ABI 1.7: query.reserved[1] flag widening the cross-family scope to the
+ * whole system (one active record per satellite serving every signal):
+ *   - GPS/QZSS: a LNAV, CNAV or CNAV-2 record serves every code of the
+ *     LNAV/CNAV/CNAV-2 families;
+ *   - BDS: a D1, D2, B-CNAV1, B-CNAV2 or B-CNAV3 record serves every code of
+ *     those families (GEO B-CNAV states stay contained);
+ *   - Galileo: the ABI 1.6 scope.
+ * It implies RTKLIB_SHARED_EVAL_CROSS_FAMILY; the ABI 1.6 combinations keep
+ * their state, bias and health.  The added combinations:
+ *   - GPS/QZSS code bias: L1 P(Y) T_GD and L2 P(Y) gamma*T_GD exactly (CNAV
+ *     and CNAV-2 broadcast the same T_GD); any other code the band-scaled
+ *     T_GD with RTKLIB_SHARED_BIAS_ISC_MISSING;
+ *   - BDS code bias: B3I 0 exactly (D1/D2 and B-CNAV clocks are referenced
+ *     to B3I); any other code UNSUPPORTED with _GROUP_DELAY_MISSING;
+ *   - health: UNKNOWN with RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE. */
+#define RTKLIB_SHARED_EVAL_SYSTEM_WIDE 4u
+/* ABI 1.7: the code bias was taken from one of the group-delay records of
+ * rtklib_shared_bias_eval_eph_set (the result identity is that record's). */
+#define RTKLIB_SHARED_BIAS_GROUP_DELAY_RECORD 8u
 
 /* Result PODs are caller-owned inputs at entry: initialize abi_version and
  * struct_size before every query.  Implementations validate those fields
@@ -559,6 +580,30 @@ int rtklib_shared_bias_eval_eph(const rtklib_shared_eph_input_t *eph,
                                 const rtklib_shared_state_query_t *query,
                                 rtklib_shared_bias_result_t *result);
 int rtklib_shared_bias_eval_glo_eph(const rtklib_shared_glo_eph_input_t *geph,
+                                    const rtklib_shared_state_query_t *query,
+                                    rtklib_shared_bias_result_t *result);
+/* ABI 1.7: code bias of the active record `eph` with the group delays of other
+ * records of the same satellite (for example the latest record of each other
+ * message family).  The result must declare ABI 1.7 or later; every record is
+ * validated as rtklib_shared_bias_eval_eph validates `eph`, and a record of
+ * another satellite is INVALID_ARGUMENT.
+ *   - `eph` must serve the query exactly as for rtklib_shared_bias_eval_eph
+ *     (own family, or the cross-family scope of the query's flags, and the
+ *     age check); otherwise that call's result is returned.
+ *   - A code of `eph`'s own families: `eph`'s own rule, as that call.
+ *   - Otherwise the group-delay record of a family requested by the query
+ *     (within the age limit when RTKLIB_SHARED_EVAL_CHECK_AGE is set) whose
+ *     own rule has a term for the code, with the largest receive_order (the
+ *     first in the array on a tie): that term, with
+ *     RTKLIB_SHARED_BIAS_CROSS_FAMILY | RTKLIB_SHARED_BIAS_GROUP_DELAY_RECORD
+ *     and that record's identity.  Every family of one system shares the
+ *     clock reference of these rules (GPS/QZSS L1 P(Y)/L2 P(Y) iono-free,
+ *     BDS B3I), so the term applies to `eph`'s clock.  Galileo records are
+ *     not used: INAV and FNAV clocks differ.
+ *   - Otherwise the cross-family rule of `eph`, as that call. */
+int rtklib_shared_bias_eval_eph_set(const rtklib_shared_eph_input_t *eph,
+                                    const rtklib_shared_eph_input_t *group_delay_records,
+                                    uint32_t record_count,
                                     const rtklib_shared_state_query_t *query,
                                     rtklib_shared_bias_result_t *result);
 int rtklib_shared_ion_query(const rtklib_shared_nav_store_t *store,

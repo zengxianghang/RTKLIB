@@ -1961,7 +1961,8 @@ static int stateless_query_valid(const rtklib_shared_state_query_t *query,
     return request_is_valid(query, satellite) &&
            query->selected_record_id == 0 && query->reserved[0] == 0 &&
            (query->reserved[1] & ~(RTKLIB_SHARED_EVAL_CHECK_AGE |
-                                   RTKLIB_SHARED_EVAL_CROSS_FAMILY)) == 0;
+                                   RTKLIB_SHARED_EVAL_CROSS_FAMILY |
+                                   RTKLIB_SHARED_EVAL_SYSTEM_WIDE)) == 0;
 }
 
 /* ABI 1.5: whether the record is within the shared default selection's age
@@ -2013,6 +2014,17 @@ static char code_band(unsigned char code)
     return obs && obs[0] ? obs[0] : '\0';
 }
 
+/* ABI 1.7 system-wide families: one active record per satellite serves every
+ * code of these families (RTKLIB_SHARED_EVAL_SYSTEM_WIDE). */
+static int system_wide_families(int system)
+{
+    if (system == SYS_GPS || system == SYS_QZS)
+        return NAV_LNAV | NAV_CNAV | NAV_CNV2;
+    if (system == SYS_CMP)
+        return NAV_D1 | NAV_D2 | NAV_D1D2 | NAV_CNV1 | NAV_CNV2 | NAV_CNV3;
+    return 0;
+}
+
 static int cross_family_in_scope(int system, uint32_t record_family,
                                  unsigned char code)
 {
@@ -2036,6 +2048,19 @@ static int cross_family_in_scope(int system, uint32_t record_family,
     return 0;
 }
 
+/* ABI 1.7: whether (record family, code) is an added system-wide
+ * combination (outside the ABI 1.6 scope). */
+static int system_wide_matches(int system, uint32_t record_family,
+                               const rtklib_shared_state_query_t *query)
+{
+    int families = system_wide_families(system);
+
+    if (!(query->reserved[1] & RTKLIB_SHARED_EVAL_SYSTEM_WIDE)) return 0;
+    return (record_family & (uint32_t)families) &&
+           (rtklib_signal_family_mask_ext(system, query->rtklib_code) &
+            families);
+}
+
 /* Whether a record that does not match the request serves it by the
  * cross-family flag: the same satellite, a record family outside the
  * requested families, and a combination in the frozen scope. */
@@ -2045,20 +2070,59 @@ static int cross_family_matches(const shared_record_t *record,
 {
     int system;
 
-    if (!(query->reserved[1] & RTKLIB_SHARED_EVAL_CROSS_FAMILY)) return 0;
+    if (!(query->reserved[1] & (RTKLIB_SHARED_EVAL_CROSS_FAMILY |
+                                RTKLIB_SHARED_EVAL_SYSTEM_WIDE))) return 0;
     system = satsys(satellite, NULL);
     if (record->identity.system != query->system ||
         (int)record->identity.prn != (int)query->prn ||
         record->kind != RTKLIB_SHARED_RECORD_EPH) return 0;
     if (query->family_mask && (record->identity.family & query->family_mask))
         return 0;
-    return cross_family_in_scope(system, record->identity.family,
-                                 query->rtklib_code);
+    if (cross_family_in_scope(system, record->identity.family,
+                              query->rtklib_code)) return 1;
+    return system_wide_matches(system, record->identity.family, query);
 }
 
 static int cross_family_health_applies(int system)
 {
     return system == SYS_QZS || system == SYS_GAL;
+}
+
+/* ABI 1.7 code bias of a system-wide combination outside the ABI 1.6 scope;
+ * see RTKLIB_SHARED_EVAL_SYSTEM_WIDE. */
+static int system_wide_bias(const eph_t *eph, int system, unsigned char code,
+                            rtklib_shared_bias_result_t *result)
+{
+    char band = code_band(code);
+    double bias = NAN;
+
+    if (system == SYS_CMP) {
+        if (code == CODE_L6I || code == CODE_L6Q || code == CODE_L6X)
+            bias = 0.0;
+        else {
+            result->bias_flags |= RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING;
+            result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+            return RTKLIB_SHARED_UNSUPPORTED;
+        }
+    }
+    else if (code == CODE_L1P || code == CODE_L1W || code == CODE_L1Y)
+        bias = CLIGHT * eph->tgd[0];
+    else if (code == CODE_L2P || code == CODE_L2W || code == CODE_L2Y ||
+             code == CODE_L2D)
+        bias = CLIGHT * SHARED_SQR(FREQ1 / FREQ2) * eph->tgd[0];
+    else {
+        bias = CLIGHT * eph->tgd[0] *
+               (band == '2' ? SHARED_SQR(FREQ1 / FREQ2) :
+                band == '5' ? SHARED_SQR(FREQ1 / FREQ5) : 1.0);
+        result->bias_flags |= RTKLIB_SHARED_BIAS_ISC_MISSING;
+    }
+    if (!isfinite(bias)) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    result->raw_code_bias_m = bias;
+    result->status = RTKLIB_SHARED_QUERY_AVAILABLE;
+    return RTKLIB_SHARED_OK;
 }
 
 /* Code bias of a cross-family evaluation; see RTKLIB_SHARED_EVAL_CROSS_FAMILY. */
@@ -2072,6 +2136,8 @@ static int cross_family_bias(const stateless_record_t *item, unsigned char code,
     double bias = NAN, gamma_a = SHARED_SQR(FREQ1 / FREQ5), gamma_b = SHARED_SQR(FREQ1 / FREQ7);
 
     result->bias_flags = RTKLIB_SHARED_BIAS_CROSS_FAMILY;
+    if (!cross_family_in_scope(system, family, code))
+        return system_wide_bias(eph, system, code, result);
     if (system == SYS_CMP) {
         result->bias_flags |= RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING;
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
@@ -2134,9 +2200,12 @@ static int stateless_state(const stateless_record_t *item, int valid,
                             query->evaluation_time, query->rtklib_code, 1,
                             result);
     if (cross && stat > 0) {
+        int system = public_system_to_internal(item->record.identity.system);
         result->eval_flags = RTKLIB_SHARED_RESULT_CROSS_FAMILY;
-        if (!cross_family_health_applies(public_system_to_internal(
-                item->record.identity.system))) {
+        /* ABI 1.7 system-wide combinations: no health word covers them. */
+        if (!cross_family_health_applies(system) ||
+            !cross_family_in_scope(system, item->record.identity.family,
+                                   query->rtklib_code)) {
             result->health = RTKLIB_SHARED_HEALTH_UNKNOWN;
             result->eval_flags |= RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE;
         }
@@ -2219,6 +2288,59 @@ int rtklib_shared_bias_eval_glo_eph(const rtklib_shared_glo_eph_input_t *geph,
     stateless_record_t item;
     int valid = stateless_geph(geph, &item);
     return stateless_bias(&item, valid, query, result);
+}
+
+/* ABI 1.7: see rtklib_shared_bias_eval_eph_set in the header. */
+int rtklib_shared_bias_eval_eph_set(
+    const rtklib_shared_eph_input_t *eph,
+    const rtklib_shared_eph_input_t *group_delay_records,
+    uint32_t record_count, const rtklib_shared_state_query_t *query,
+    rtklib_shared_bias_result_t *result)
+{
+    stateless_record_t item, other;
+    rtklib_shared_bias_result_t candidate, best;
+    uint64_t best_order = 0;
+    int valid, satellite, stat, found = 0;
+    uint32_t k;
+
+    if (!result || !valid_header(result->abi_version, result->struct_size,
+                                 sizeof(*result)) ||
+        !declares_minor(result->abi_version, 7))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    valid = stateless_eph(eph, &item) &&
+            (record_count == 0 || group_delay_records != NULL);
+    for (k = 0; valid && k < record_count; k++) {
+        valid = stateless_eph(&group_delay_records[k], &other) &&
+                other.record.identity.system == item.record.identity.system &&
+                other.record.identity.prn == item.record.identity.prn;
+    }
+    stat = stateless_bias(&item, valid, query, result);
+    /* Only a cross-family service of the active record looks further. */
+    if (stat == RTKLIB_SHARED_INVALID_ARGUMENT ||
+        !(result->bias_flags & RTKLIB_SHARED_BIAS_CROSS_FAMILY) ||
+        item.record.identity.system == RTKLIB_SHARED_SYS_GAL ||
+        !stateless_query_valid(query, &satellite)) return stat;
+    for (k = 0; k < record_count; k++) {
+        if (!stateless_eph(&group_delay_records[k], &other) ||
+            !record_matches_request(&other.record, query, satellite) ||
+            !stateless_within_age(&other, query)) continue;
+        init_bias_result(&candidate);
+        if (bias_payload(&other.record, &other.eph, NULL, query->rtklib_code,
+                         &candidate) != RTKLIB_SHARED_OK) continue;
+        if (found && other.record.identity.receive_order <= best_order)
+            continue;
+        found = 1;
+        best_order = other.record.identity.receive_order;
+        best = candidate;
+        best.identity = other.record.identity;
+    }
+    if (!found) return stat;
+    result->status = best.status;
+    result->raw_code_bias_m = best.raw_code_bias_m;
+    result->identity = best.identity;
+    result->bias_flags = RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                         RTKLIB_SHARED_BIAS_GROUP_DELAY_RECORD;
+    return RTKLIB_SHARED_OK;
 }
 
 /* Nominal URA value X (metres) of a CNAV URA_ED / URA_NED0 index N in
