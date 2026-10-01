@@ -4,6 +4,39 @@ This document describes ABI version 1 of `src/rtklib_shared_api.h`.  The
 header is the only downstream compile-time contract.  `nav_t`, `eph_t`,
 `geph_t`, `ion_t` and `gtime_t` remain private to RTKLIB.
 
+## Stateless cross-family evaluation (ABI 1.6, issue #42)
+
+`query.reserved[1] |= RTKLIB_SHARED_EVAL_CROSS_FAMILY` lets a stateless
+evaluation serve a code outside the record's message family. The record family
+must not be in the query's `family_mask` (the signal's own families), and the
+(system, record family, code) combination must be in this frozen scope:
+
+| Record | Codes | State | Code bias | Health |
+| --- | --- | --- | --- | --- |
+| GPS/QZSS LNAV | L2C `2S/2L/2X`, L5 `5I/5Q/5X` | the record's own | L2C: `gamma12 T_GD c`; L5: `(f1/f5)^2 T_GD c`; `ISC_MISSING` | GPS: not applicable (UNKNOWN); QZSS: LNAV band bits |
+| Galileo INAV | E5a `5I/5Q/5X` | the record's own | `(BGD(E1,E5b) + (gamma_a - 1) BGD(E1,E5a)) c` | the E1/E5a/E5b word |
+| Galileo FNAV | E1 `1B/1C/1X`, E5b `7I/7Q/7X` | the record's own | E1: `BGD(E1,E5a) c` (own rule); E5b: `(BGD(E1,E5a) + (gamma_b - 1) BGD(E1,E5b)) c` | the E1/E5a/E5b word |
+| BDS D1/D2 | B1C `1D/1P/1X`, B2a `5P/5X`, B2b `7D` | the record's own | UNSUPPORTED, `GROUP_DELAY_MISSING` | not applicable (UNKNOWN) |
+
+The state does not depend on the code. A cross-family result sets
+`eval_flags` (`RTKLIB_SHARED_RESULT_CROSS_FAMILY`, and
+`RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE` when the record's health word does
+not cover the signal) and `bias_flags` (`RTKLIB_SHARED_BIAS_CROSS_FAMILY`,
+`_ISC_MISSING`, `_GROUP_DELAY_MISSING`). These fields take the first four
+bytes of the former result `reserved` arrays, so the layouts are unchanged.
+
+The Galileo terms are exact for the record's own clock. A clock referenced to
+the iono-free combination of E1 and E5x needs, on another frequency k, the term
+`b_k - b_IF`. Both BGDs give it as
+`BGD(E1,E5x) + (gamma_k - 1) BGD(E1,E5k)`, with `gamma_k = (f1/f_k)^2`.
+
+Any other combination stays `UNSUPPORTED`. A record whose family is requested is
+evaluated exactly as without the flag. Store queries ignore the flag.
+`test_rtklib_shared_api` checks every fixture record against every code outside
+its families: 32 combinations in scope and 103 out of scope. It checks the
+state, the flags, the health and the bias against the formulas above, computed
+from the record's T_GD and BGD values.
+
 ## Stateless age check (ABI 1.5)
 
 A stateless evaluation (`rtklib_shared_{state,bias}_eval_{eph,glo_eph}`)

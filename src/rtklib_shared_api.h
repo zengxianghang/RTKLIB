@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define RTKLIB_SHARED_ABI_MAJOR 1u
-#define RTKLIB_SHARED_ABI_MINOR 5u
+#define RTKLIB_SHARED_ABI_MINOR 6u
 #define RTKLIB_SHARED_ABI_VERSION \
     ((RTKLIB_SHARED_ABI_MAJOR << 16) | RTKLIB_SHARED_ABI_MINOR)
 /* Every ABI 1.x POD keeps the 1.0 layout and size.  A caller may keep
@@ -305,6 +305,36 @@ typedef struct {
  * and no state or bias. */
 #define RTKLIB_SHARED_EVAL_CHECK_AGE 1u
 
+/* ABI 1.6: query.reserved[1] flag of the stateless evaluation functions:
+ * cross-family evaluation (RTKLIB issue #42).  A record whose family is not
+ * in the query's family_mask (the signal's own families) serves the code
+ * when (system, record family, code) is in the frozen scope:
+ *   - GPS/QZSS LNAV -> L2C and L5 codes (families CNAV/CNV2, not LNAV);
+ *   - Galileo INAV -> E5a codes; Galileo FNAV -> E1 and E5b codes;
+ *   - BDS D1/D2 -> B-CNAV codes (families CNV1/CNV2/CNV3 only).
+ * The state is the record's own (it does not depend on the code) with
+ * RTKLIB_SHARED_RESULT_CROSS_FAMILY set.  Code bias:
+ *   - LNAV: L2C gamma*T_GD, L5 (f1/f5)^2*T_GD, with
+ *     RTKLIB_SHARED_BIAS_ISC_MISSING (the signal's ISC is neither applied
+ *     nor reported as zero);
+ *   - Galileo: the record's own rule when it has one (FNAV E1: BGD(E1,E5a));
+ *     else the exact single-frequency term for the record's clock from both
+ *     BGDs: INAV E5a BGD(E1,E5b) + (gamma_a - 1) BGD(E1,E5a), FNAV E5b
+ *     BGD(E1,E5a) + (gamma_b - 1) BGD(E1,E5b), gamma = (f1/f)^2;
+ *   - BDS D1/D2 -> B-CNAV: UNSUPPORTED with RTKLIB_SHARED_BIAS_GROUP_DELAY_
+ *     MISSING (D1/D2 carry no B1C/B2a/B2b group delay).
+ * Health: GPS LNAV and BDS D1/D2 words do not cover these signals: health
+ * UNKNOWN with RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE; QZSS LNAV (band
+ * bits) and Galileo (E1/E5a/E5b in one word) keep their health.  Any other
+ * combination stays UNSUPPORTED; a record of a requested family is evaluated
+ * as without the flag. */
+#define RTKLIB_SHARED_EVAL_CROSS_FAMILY 2u
+#define RTKLIB_SHARED_RESULT_CROSS_FAMILY 1u
+#define RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE 2u
+#define RTKLIB_SHARED_BIAS_CROSS_FAMILY 1u
+#define RTKLIB_SHARED_BIAS_ISC_MISSING 2u
+#define RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING 4u
+
 /* Result PODs are caller-owned inputs at entry: initialize abi_version and
  * struct_size before every query.  Implementations validate those fields
  * before writing any part of the result. */
@@ -337,7 +367,10 @@ typedef struct {
      * stay UNSUPPORTED (Issue #20 Phase A containment), B-CNAV variance is
      * the decoded scalar, and this field is left zero. */
     int32_t variance_status;
-    uint8_t reserved[28];
+    /* ABI 1.6: RTKLIB_SHARED_RESULT_* flags of a stateless evaluation; 0
+     * otherwise.  It occupies the first four bytes of the former reserved. */
+    uint32_t eval_flags;
+    uint8_t reserved[24];
 } rtklib_shared_state_result_t;
 
 typedef struct {
@@ -364,7 +397,10 @@ typedef struct {
      * value.  A caller removing the term subtracts raw_code_bias_m. */
     double raw_code_bias_m;
     rtklib_shared_record_identity_t identity;
-    uint8_t reserved[32];
+    /* ABI 1.6: RTKLIB_SHARED_BIAS_* flags of a stateless evaluation; 0
+     * otherwise.  It occupies the first four bytes of the former reserved. */
+    uint32_t bias_flags;
+    uint8_t reserved[28];
 } rtklib_shared_bias_result_t;
 
 /* ABI 1.1: GPS/QZSS CNAV/CNAV-2 user range accuracy (IS-GPS-200N
