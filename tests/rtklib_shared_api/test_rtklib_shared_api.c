@@ -953,7 +953,8 @@ static int check_stateless_equivalence(const nav_t *nav)
     rtklib_shared_nav_store_t *store = rtklib_shared_nav_create();
     rtklib_shared_eph_input_t eph;
     rtklib_shared_glo_eph_input_t geph;
-    rtklib_shared_record_identity_t identity;
+    rtklib_shared_record_identity_t identity, stateless_identity;
+    rtklib_shared_ion_input_t ion;
     rtklib_shared_record_id_t id;
     rtklib_shared_state_query_t query;
     rtklib_shared_state_result_t state;
@@ -975,6 +976,16 @@ static int check_stateless_equivalence(const nav_t *nav)
         init_identity(&identity);
         CHECK(rtklib_shared_nav_record(store, id, &identity) ==
                   RTKLIB_SHARED_OK, "inserted record has no identity");
+        init_identity(&stateless_identity);
+        CHECK((i < nav->n ?
+                   rtklib_shared_eph_input_identity(&eph, &stateless_identity) :
+                   rtklib_shared_glo_eph_input_identity(&geph,
+                                                        &stateless_identity)) ==
+                  RTKLIB_SHARED_OK && stateless_identity.record_id == 0,
+              "stateless input identity failed");
+        stateless_identity.record_id = identity.record_id;
+        CHECK(!memcmp(&stateless_identity, &identity, sizeof(identity)),
+              "stateless input identity differs from the inserted record");
         for (code = 1; code <= MAXCODE; code++) {
             for (k = 0; k < sizeof(stateless_offsets_s) /
                             sizeof(stateless_offsets_s[0]); k++) {
@@ -1001,6 +1012,49 @@ static int check_stateless_equivalence(const nav_t *nav)
               "stateless satellite mismatch differs from the store query");
     }
     CHECK(available > 0, "no stateless evaluation was available");
+    for (i = 0; i < nav->nion; i++) {
+        fill_ion_input(&nav->ion[i], &ion);
+        CHECK(rtklib_shared_nav_insert_ion(store, &ion, &id) ==
+                  RTKLIB_SHARED_OK, "stateless ION fixture insert failed");
+        init_identity(&identity);
+        init_identity(&stateless_identity);
+        CHECK(rtklib_shared_nav_record(store, id, &identity) ==
+                  RTKLIB_SHARED_OK &&
+              rtklib_shared_ion_input_identity(&ion, &stateless_identity) ==
+                  RTKLIB_SHARED_OK && stateless_identity.record_id == 0,
+              "stateless ION identity failed");
+        stateless_identity.record_id = identity.record_id;
+        CHECK(!memcmp(&stateless_identity, &identity, sizeof(identity)),
+              "stateless ION identity differs from the inserted record");
+    }
+    /* The identity verdict is the insert verdict. */
+    ion.value_count = 0;
+    init_identity(&stateless_identity);
+    CHECK(rtklib_shared_nav_insert_ion(store, &ion, NULL) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT &&
+          rtklib_shared_ion_input_identity(&ion, &stateless_identity) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless ION identity accepted an input the insert rejects");
+    fill_eph_input(&nav->eph[0], &eph);
+    eph.receive_order = 0;
+    CHECK(rtklib_shared_nav_insert_eph(store, &eph, NULL) ==
+              rtklib_shared_eph_input_identity(&eph, &stateless_identity),
+          "stateless EPH identity verdict differs from the insert");
+    fill_eph_input(&nav->eph[0], &eph);
+    stateless_identity.struct_size = 8;
+    CHECK(rtklib_shared_eph_input_identity(&eph, &stateless_identity) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT &&
+          rtklib_shared_eph_input_identity(&eph, NULL) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless identity accepted an invalid identity output");
+    fill_glo_input(&nav->geph[0], &geph);
+    geph.prn = 0;
+    init_identity(&stateless_identity);
+    CHECK(rtklib_shared_nav_insert_glo_eph(store, &geph, NULL) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT &&
+          rtklib_shared_glo_eph_input_identity(&geph, &stateless_identity) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless GLONASS identity accepted an input the insert rejects");
 
     /* Argument contract. */
     fill_eph_input(&nav->eph[0], &eph);

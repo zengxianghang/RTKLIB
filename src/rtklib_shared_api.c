@@ -1309,18 +1309,17 @@ int rtklib_shared_nav_insert_glo_eph(rtklib_shared_nav_store_t *store,
     return RTKLIB_SHARED_OK;
 }
 
-int rtklib_shared_nav_insert_ion(rtklib_shared_nav_store_t *store,
-                                 const rtklib_shared_ion_input_t *input,
-                                 rtklib_shared_record_id_t *record_id)
+/* Validation of an ION input, shared by the insert and the stateless
+ * identity (ABI 1.4). */
+static int valid_ion_input(const rtklib_shared_ion_input_t *input,
+                           int *system)
 {
-    ion_t ion;
-    int system;
     size_t i;
 
-    if (!store || !input || !valid_header(input->abi_version,
-                                          input->struct_size, sizeof(*input)) ||
-        !(system = public_system_to_internal(input->system)) ||
-        !valid_ion_family_for_system(system, input->family) ||
+    if (!input || !valid_header(input->abi_version,
+                                input->struct_size, sizeof(*input)) ||
+        !(*system = public_system_to_internal(input->system)) ||
+        !valid_ion_family_for_system(*system, input->family) ||
         !valid_shared_time(input->transmit_time) ||
         !valid_source(input->source_id) ||
         !valid_fixed_text(input->family_subtype,
@@ -1328,10 +1327,22 @@ int rtklib_shared_nav_insert_ion(rtklib_shared_nav_store_t *store,
         input->receive_order == 0 ||
         input->value_count == 0 || input->value_count > 32 ||
         !finite_array(input->values, input->value_count))
-        return RTKLIB_SHARED_INVALID_ARGUMENT;
+        return 0;
     for (i = 0; i < input->value_count; ++i) {
-        if (input->present[i] > 1) return RTKLIB_SHARED_INVALID_ARGUMENT;
+        if (input->present[i] > 1) return 0;
     }
+    return 1;
+}
+
+int rtklib_shared_nav_insert_ion(rtklib_shared_nav_store_t *store,
+                                 const rtklib_shared_ion_input_t *input,
+                                 rtklib_shared_record_id_t *record_id)
+{
+    ion_t ion;
+    int system;
+
+    if (!store || !valid_ion_input(input, &system))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
     if (!reserve_records(store, store->nrecords + 1) ||
         !reserve_ions(store, store->nion_records + 1))
         return RTKLIB_SHARED_ALLOCATION_ERROR;
@@ -1874,6 +1885,61 @@ int rtklib_shared_bias_query(const rtklib_shared_nav_store_t *store,
         record->kind == RTKLIB_SHARED_RECORD_GLO_EPH ?
             &store->nav.geph[record->index] : NULL,
         query->rtklib_code, result);
+}
+
+/* ABI 1.4: the identity a record would have after insertion, without a
+ * store.  INVALID_ARGUMENT exactly when the insert rejects the input; the
+ * identity carries record_id 0 and source kind RECEIVER. */
+static int valid_identity_output(const rtklib_shared_record_identity_t *identity)
+{
+    return identity && valid_header(identity->abi_version,
+                                    identity->struct_size, sizeof(*identity));
+}
+
+int rtklib_shared_eph_input_identity(const rtklib_shared_eph_input_t *input,
+                                     rtklib_shared_record_identity_t *identity)
+{
+    eph_t eph;
+    int system, satellite;
+
+    if (!valid_identity_output(identity) ||
+        !valid_common_eph_input(input, &system, &satellite))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    fill_eph_from_input(&eph, input, system, satellite);
+    return eph_identity(&eph, RTKLIB_SHARED_SOURCE_RECEIVER,
+                        input->receive_order, input->source_id, identity) ?
+        RTKLIB_SHARED_OK : RTKLIB_SHARED_INVALID_ARGUMENT;
+}
+
+int rtklib_shared_glo_eph_input_identity(
+    const rtklib_shared_glo_eph_input_t *input,
+    rtklib_shared_record_identity_t *identity)
+{
+    geph_t geph;
+    int satellite;
+
+    if (!valid_identity_output(identity) || !valid_glo_input(input, &satellite))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    fill_geph_from_input(&geph, input, satellite);
+    return geph_identity(&geph, RTKLIB_SHARED_SOURCE_RECEIVER,
+                         input->receive_order, input->source_id, identity) ?
+        RTKLIB_SHARED_OK : RTKLIB_SHARED_INVALID_ARGUMENT;
+}
+
+int rtklib_shared_ion_input_identity(const rtklib_shared_ion_input_t *input,
+                                     rtklib_shared_record_identity_t *identity)
+{
+    int system;
+
+    if (!valid_identity_output(identity) || !valid_ion_input(input, &system))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    return fill_identity(identity, RTKLIB_SHARED_RECORD_ION,
+                         RTKLIB_SHARED_SOURCE_RECEIVER, (uint32_t)system, 0,
+                         input->family, -1, -1, -1, INT32_MIN,
+                         input->receive_order, input->transmit_time,
+                         input->transmit_time, input->transmit_time,
+                         input->source_id, input->family_subtype) ?
+        RTKLIB_SHARED_OK : RTKLIB_SHARED_INVALID_ARGUMENT;
 }
 
 /* ABI 1.4: evaluation of one record given as a public input, without a

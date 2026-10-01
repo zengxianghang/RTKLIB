@@ -24,9 +24,17 @@ a mismatch is `UNSUPPORTED` and carries the record identity.  The result must
 declare ABI 1.4 or later; ABI 1.4 also selects the split metric/variance
 contract of ABI 1.1.  No call allocates or keeps state.
 
+`rtklib_shared_eph_input_identity()`, `rtklib_shared_glo_eph_input_identity()`
+and `rtklib_shared_ion_input_identity()` return the identity a record would
+have after insertion (`record_id` 0, source kind `RECEIVER`) without a store.
+They return `INVALID_ARGUMENT` exactly when the corresponding insert rejects
+the input, so a caller can validate a receiver record without keeping a
+scratch store.
+
 The `test_rtklib_shared_api` suite compares every fixture record across every
 RTKLIB code and eight evaluation times (inside and far outside the fit
-interval) with insertion followed by an explicit-id query: results are
+interval) with insertion followed by an explicit-id query, and every fixture
+EPH, GLONASS and ION identity with the inserted record's: results are
 byte-identical apart from `record_id`.
 
 ## BDS modern accuracy (ABI 1.3)

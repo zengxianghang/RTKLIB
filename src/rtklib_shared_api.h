@@ -478,6 +478,19 @@ int rtklib_shared_modern_ura_query(const rtklib_shared_nav_store_t *store,
 int rtklib_shared_bds_sisa_query(const rtklib_shared_nav_store_t *store,
                                  const rtklib_shared_state_query_t *query,
                                  rtklib_shared_bds_sisa_result_t *result);
+/* ABI 1.4: the identity a record would have after insertion, without a store.
+ * The input is validated exactly as the insert functions validate it:
+ * INVALID_ARGUMENT exactly when the corresponding insert rejects it.  On OK the
+ * identity equals the inserted record's identity except that record_id is 0
+ * (source kind RECEIVER).  identity must carry a valid ABI header. */
+int rtklib_shared_eph_input_identity(const rtklib_shared_eph_input_t *input,
+                                     rtklib_shared_record_identity_t *identity);
+int rtklib_shared_glo_eph_input_identity(
+    const rtklib_shared_glo_eph_input_t *input,
+    rtklib_shared_record_identity_t *identity);
+int rtklib_shared_ion_input_identity(const rtklib_shared_ion_input_t *input,
+                                     rtklib_shared_record_identity_t *identity);
+
 /* ABI 1.4: evaluate one ephemeris given as a public input, without a store.
  * The input is validated exactly as the insert functions validate it, and the
  * record is evaluated by the same code as a store query with its explicit
