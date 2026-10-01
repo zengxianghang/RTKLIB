@@ -887,11 +887,76 @@ static int check_source_kind_default_selection(const char *path,
 
 /* ABI 1.4 stateless evaluation: for every record, every RTKLIB code and
  * several evaluation times (inside and far outside the fit interval), the
- * stateless result is byte-identical to inserting the same input and querying
- * it by explicit record id, apart from the identity's record_id (0). */
+ * stateless result is identical (every field, doubles bitwise) to inserting
+ * the same input and querying it by explicit record id, apart from the
+ * identity's record_id (0). */
 static const double stateless_offsets_s[] = {
     -86400.0, -7200.0, -1.0, 0.0, 0.5, 1800.0, 7199.999, 86400.0
 };
+
+/* Field-wise equality (structure padding is unspecified); doubles compare
+ * bitwise, so equal NaN payloads are equal. */
+static int same_bits(double first, double second)
+{
+    return !memcmp(&first, &second, sizeof(first));
+}
+
+static int identical_time(rtklib_shared_time_t first,
+                          rtklib_shared_time_t second)
+{
+    return first.week == second.week && same_bits(first.sow, second.sow);
+}
+
+static int identical_identity(const rtklib_shared_record_identity_t *a,
+                              const rtklib_shared_record_identity_t *b)
+{
+    return a->abi_version == b->abi_version &&
+           a->struct_size == b->struct_size && a->record_id == b->record_id &&
+           a->record_kind == b->record_kind &&
+           a->source_kind == b->source_kind && a->system == b->system &&
+           a->prn == b->prn && a->family == b->family && a->iode == b->iode &&
+           a->iodc == b->iodc && a->health_raw == b->health_raw &&
+           a->glonass_fcn == b->glonass_fcn &&
+           a->receive_order == b->receive_order &&
+           identical_time(a->toe, b->toe) && identical_time(a->toc, b->toc) &&
+           identical_time(a->transmit_time, b->transmit_time) &&
+           !memcmp(a->source_id, b->source_id, sizeof(a->source_id)) &&
+           !memcmp(a->family_subtype, b->family_subtype,
+                   sizeof(a->family_subtype)) &&
+           !memcmp(a->reserved, b->reserved, sizeof(a->reserved));
+}
+
+static int identical_state(const rtklib_shared_state_result_t *a,
+                           const rtklib_shared_state_result_t *b)
+{
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (!same_bits(a->position_ecef_m[i], b->position_ecef_m[i]) ||
+            !same_bits(a->velocity_ecef_mps[i], b->velocity_ecef_mps[i]))
+            return 0;
+    }
+    return a->abi_version == b->abi_version &&
+           a->struct_size == b->struct_size && a->status == b->status &&
+           a->health == b->health && a->health_raw == b->health_raw &&
+           a->state_valid == b->state_valid &&
+           same_bits(a->clock_bias_s, b->clock_bias_s) &&
+           same_bits(a->clock_drift_sps, b->clock_drift_sps) &&
+           same_bits(a->variance_m2, b->variance_m2) &&
+           identical_identity(&a->identity, &b->identity) &&
+           a->variance_status == b->variance_status &&
+           !memcmp(a->reserved, b->reserved, sizeof(a->reserved));
+}
+
+static int identical_bias(const rtklib_shared_bias_result_t *a,
+                          const rtklib_shared_bias_result_t *b)
+{
+    return a->abi_version == b->abi_version &&
+           a->struct_size == b->struct_size && a->status == b->status &&
+           same_bits(a->raw_code_bias_m, b->raw_code_bias_m) &&
+           identical_identity(&a->identity, &b->identity) &&
+           !memcmp(a->reserved, b->reserved, sizeof(a->reserved));
+}
 
 static rtklib_shared_time_t shifted_time(rtklib_shared_time_t time,
                                          double seconds)
@@ -926,8 +991,8 @@ static int compare_stateless(const rtklib_shared_nav_store_t *store,
           stored.identity.record_id == by_id->selected_record_id,
           "stateless identity carries a record id");
     stateless.identity.record_id = stored.identity.record_id;
-    CHECK(!memcmp(&stateless, &stored, sizeof(stored)),
-          "stateless state result is not byte-identical");
+    CHECK(identical_state(&stateless, &stored),
+          "stateless state result is not identical");
     if (stored_stat == RTKLIB_SHARED_OK) (*available)++;
 
     init_bias_result(&stored_bias);
@@ -943,8 +1008,8 @@ static int compare_stateless(const rtklib_shared_nav_store_t *store,
     CHECK(stateless_bias.identity.record_id == 0,
           "stateless bias identity carries a record id");
     stateless_bias.identity.record_id = stored_bias.identity.record_id;
-    CHECK(!memcmp(&stateless_bias, &stored_bias, sizeof(stored_bias)),
-          "stateless bias result is not byte-identical");
+    CHECK(identical_bias(&stateless_bias, &stored_bias),
+          "stateless bias result is not identical");
     return 0;
 }
 
@@ -984,7 +1049,7 @@ static int check_stateless_equivalence(const nav_t *nav)
                   RTKLIB_SHARED_OK && stateless_identity.record_id == 0,
               "stateless input identity failed");
         stateless_identity.record_id = identity.record_id;
-        CHECK(!memcmp(&stateless_identity, &identity, sizeof(identity)),
+        CHECK(identical_identity(&stateless_identity, &identity),
               "stateless input identity differs from the inserted record");
         for (code = 1; code <= MAXCODE; code++) {
             for (k = 0; k < sizeof(stateless_offsets_s) /
@@ -1024,7 +1089,7 @@ static int check_stateless_equivalence(const nav_t *nav)
                   RTKLIB_SHARED_OK && stateless_identity.record_id == 0,
               "stateless ION identity failed");
         stateless_identity.record_id = identity.record_id;
-        CHECK(!memcmp(&stateless_identity, &identity, sizeof(identity)),
+        CHECK(identical_identity(&stateless_identity, &identity),
               "stateless ION identity differs from the inserted record");
     }
     /* The identity verdict is the insert verdict. */

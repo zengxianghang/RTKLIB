@@ -34,8 +34,8 @@ scratch store.
 The `test_rtklib_shared_api` suite compares every fixture record across every
 RTKLIB code and eight evaluation times (inside and far outside the fit
 interval) with insertion followed by an explicit-id query, and every fixture
-EPH, GLONASS and ION identity with the inserted record's: results are
-byte-identical apart from `record_id`.
+EPH, GLONASS and ION identity with the inserted record's: every field is
+identical (doubles bitwise) apart from `record_id`.
 
 ## BDS modern accuracy (ABI 1.3)
 
