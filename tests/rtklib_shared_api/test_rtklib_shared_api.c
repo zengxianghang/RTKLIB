@@ -885,6 +885,184 @@ static int check_source_kind_default_selection(const char *path,
     return 0;
 }
 
+/* ABI 1.4 stateless evaluation: for every record, every RTKLIB code and
+ * several evaluation times (inside and far outside the fit interval), the
+ * stateless result is byte-identical to inserting the same input and querying
+ * it by explicit record id, apart from the identity's record_id (0). */
+static const double stateless_offsets_s[] = {
+    -86400.0, -7200.0, -1.0, 0.0, 0.5, 1800.0, 7199.999, 86400.0
+};
+
+static rtklib_shared_time_t shifted_time(rtklib_shared_time_t time,
+                                         double seconds)
+{
+    time.sow += seconds;
+    while (time.sow < 0.0) { time.sow += 604800.0; time.week--; }
+    while (time.sow >= 604800.0) { time.sow -= 604800.0; time.week++; }
+    return time;
+}
+
+static int compare_stateless(const rtklib_shared_nav_store_t *store,
+                             const rtklib_shared_eph_input_t *eph,
+                             const rtklib_shared_glo_eph_input_t *geph,
+                             const rtklib_shared_state_query_t *by_id,
+                             size_t *available)
+{
+    rtklib_shared_state_query_t query = *by_id;
+    rtklib_shared_state_result_t stored, stateless;
+    rtklib_shared_bias_result_t stored_bias, stateless_bias;
+    int stored_stat, stateless_stat;
+
+    init_state_result(&stored);
+    init_state_result(&stateless);
+    stored_stat = rtklib_shared_state_query(store, &query, &stored);
+    query.selected_record_id = 0;
+    stateless_stat = eph ?
+        rtklib_shared_state_eval_eph(eph, &query, &stateless) :
+        rtklib_shared_state_eval_glo_eph(geph, &query, &stateless);
+    CHECK(stateless_stat == stored_stat,
+          "stateless state status differs from the store query");
+    CHECK(stateless.identity.record_id == 0 &&
+          stored.identity.record_id == by_id->selected_record_id,
+          "stateless identity carries a record id");
+    stateless.identity.record_id = stored.identity.record_id;
+    CHECK(!memcmp(&stateless, &stored, sizeof(stored)),
+          "stateless state result is not byte-identical");
+    if (stored_stat == RTKLIB_SHARED_OK) (*available)++;
+
+    init_bias_result(&stored_bias);
+    init_bias_result(&stateless_bias);
+    query.selected_record_id = by_id->selected_record_id;
+    stored_stat = rtklib_shared_bias_query(store, &query, &stored_bias);
+    query.selected_record_id = 0;
+    stateless_stat = eph ?
+        rtklib_shared_bias_eval_eph(eph, &query, &stateless_bias) :
+        rtklib_shared_bias_eval_glo_eph(geph, &query, &stateless_bias);
+    CHECK(stateless_stat == stored_stat,
+          "stateless bias status differs from the store query");
+    CHECK(stateless_bias.identity.record_id == 0,
+          "stateless bias identity carries a record id");
+    stateless_bias.identity.record_id = stored_bias.identity.record_id;
+    CHECK(!memcmp(&stateless_bias, &stored_bias, sizeof(stored_bias)),
+          "stateless bias result is not byte-identical");
+    return 0;
+}
+
+static int check_stateless_equivalence(const nav_t *nav)
+{
+    rtklib_shared_nav_store_t *store = rtklib_shared_nav_create();
+    rtklib_shared_eph_input_t eph;
+    rtklib_shared_glo_eph_input_t geph;
+    rtklib_shared_record_identity_t identity;
+    rtklib_shared_record_id_t id;
+    rtklib_shared_state_query_t query;
+    rtklib_shared_state_result_t state;
+    rtklib_shared_bias_result_t bias;
+    size_t compared = 0, available = 0, k;
+    int i, code;
+
+    CHECK(store != NULL, "stateless comparison store allocation failed");
+    for (i = 0; i < nav->n + nav->ng; i++) {
+        if (i < nav->n) {
+            fill_eph_input(&nav->eph[i], &eph);
+            CHECK(rtklib_shared_nav_insert_eph(store, &eph, &id) ==
+                      RTKLIB_SHARED_OK, "stateless fixture insert failed");
+        } else {
+            fill_glo_input(&nav->geph[i - nav->n], &geph);
+            CHECK(rtklib_shared_nav_insert_glo_eph(store, &geph, &id) ==
+                      RTKLIB_SHARED_OK, "stateless GLONASS insert failed");
+        }
+        init_identity(&identity);
+        CHECK(rtklib_shared_nav_record(store, id, &identity) ==
+                  RTKLIB_SHARED_OK, "inserted record has no identity");
+        for (code = 1; code <= MAXCODE; code++) {
+            for (k = 0; k < sizeof(stateless_offsets_s) /
+                            sizeof(stateless_offsets_s[0]); k++) {
+                init_state_query(&query, identity.system, identity.prn,
+                                 identity.family, (unsigned char)code,
+                                 shifted_time(identity.toe,
+                                              stateless_offsets_s[k]), id);
+                query.glonass_fcn = identity.glonass_fcn;
+                CHECK(compare_stateless(store, i < nav->n ? &eph : NULL,
+                                        i < nav->n ? NULL : &geph, &query,
+                                        &available) == 0,
+                      "stateless evaluation differs from the store query");
+                compared++;
+            }
+        }
+        /* A request for another satellite or family is UNSUPPORTED, with
+         * the record identity, exactly as for an explicit record id. */
+        init_state_query(&query, identity.system, identity.prn + 1,
+                         identity.family, CODE_L1C, identity.toe, id);
+        query.glonass_fcn = identity.glonass_fcn;
+        CHECK(compare_stateless(store, i < nav->n ? &eph : NULL,
+                                i < nav->n ? NULL : &geph, &query,
+                                &available) == 0,
+              "stateless satellite mismatch differs from the store query");
+    }
+    CHECK(available > 0, "no stateless evaluation was available");
+
+    /* Argument contract. */
+    fill_eph_input(&nav->eph[0], &eph);
+    init_state_query(&query, eph.system, eph.prn, eph.family, CODE_L1C,
+                     eph.toe, 0);
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_eval_eph(&eph, &query, &state) ==
+              RTKLIB_SHARED_OK && state.identity.source_kind ==
+              RTKLIB_SHARED_SOURCE_RECEIVER &&
+          !strcmp(state.identity.source_id, eph.source_id),
+          "stateless evaluation of a valid record failed");
+    state.abi_version = (RTKLIB_SHARED_ABI_MAJOR << 16) | 3u;
+    CHECK(rtklib_shared_state_eval_eph(&eph, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless evaluation accepted a result declaring ABI 1.3");
+    init_bias_result(&bias);
+    bias.abi_version = (RTKLIB_SHARED_ABI_MAJOR << 16) | 3u;
+    CHECK(rtklib_shared_bias_eval_eph(&eph, &query, &bias) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless bias accepted a result declaring ABI 1.3");
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_eval_eph(NULL, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT &&
+          rtklib_shared_state_eval_eph(&eph, NULL, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT &&
+          rtklib_shared_state_eval_eph(&eph, &query, NULL) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless evaluation accepted a NULL argument");
+    query.selected_record_id = 1;
+    CHECK(rtklib_shared_state_eval_eph(&eph, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless evaluation accepted a selected record id");
+    query.selected_record_id = 0;
+    query.reserved[0] = RTKLIB_SHARED_SOURCE_RECEIVER;
+    CHECK(rtklib_shared_state_eval_eph(&eph, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless evaluation accepted a source-kind filter");
+    query.reserved[0] = 0;
+    eph.prn = 0;
+    init_bias_result(&bias);
+    CHECK(rtklib_shared_state_eval_eph(&eph, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT &&
+          rtklib_shared_bias_eval_eph(&eph, &query, &bias) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT && state.state_valid == 0,
+          "stateless evaluation accepted an invalid ephemeris");
+    fill_glo_input(&nav->geph[0], &geph);
+    init_state_query(&query, geph.system, geph.prn, RTKLIB_SHARED_NAV_FDMA,
+                     CODE_L1C, geph.toe, 0);
+    query.glonass_fcn = geph.glonass_fcn;
+    init_state_result(&state);
+    CHECK(rtklib_shared_state_eval_glo_eph(&geph, &query, &state) ==
+              RTKLIB_SHARED_OK, "stateless GLONASS evaluation failed");
+    geph.prn = 0;
+    CHECK(rtklib_shared_state_eval_glo_eph(&geph, &query, &state) ==
+              RTKLIB_SHARED_INVALID_ARGUMENT,
+          "stateless evaluation accepted an invalid GLONASS ephemeris");
+    printf("PASS stateless records=%d comparisons=%zu available=%zu\n",
+           nav->n + nav->ng, compared, available);
+    rtklib_shared_nav_destroy(store);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] :
@@ -1656,6 +1834,9 @@ int main(int argc, char **argv)
               signal.glonass_fcn == 0 && signal.carrier_frequency_hz > 0.0,
               "FCN=0 signal mapping was not preserved");
     }
+
+    CHECK(check_stateless_equivalence(&private_nav) == 0,
+          "stateless evaluation is not equivalent to the store query");
 
     /* Week 3551 overflows gpst2time()/bdt2time()'s historical int product on
      * this RTKLIB build.  Reject it at the public boundary rather than
