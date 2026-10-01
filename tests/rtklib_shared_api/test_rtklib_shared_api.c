@@ -1476,7 +1476,7 @@ static int check_stateless_system_wide(const nav_t *nav)
     rtklib_shared_state_query_t query;
     rtklib_shared_state_result_t own, v16, wide;
     rtklib_shared_bias_result_t b16, bwide;
-    size_t added = 0, unchanged = 0, contained = 0;
+    size_t added = 0, unchanged = 0, contained = 0, own_rule = 0;
     int i, code, own_code, system, family, mask, families, j, stat;
 
     for (i = 0; i < nav->n; i++) {
@@ -1540,7 +1540,17 @@ static int check_stateless_system_wide(const nav_t *nav)
                       RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE) &&
                   wide.health == RTKLIB_SHARED_HEALTH_UNKNOWN,
                   "system-wide clock, flags or health differ");
-            if (system == SYS_CMP) {
+            init_bias_result(&b16);
+            if (rtklib_signal_code_bias_selected_ext(system, family,
+                    (unsigned char)code, e, NULL, &b16.raw_code_bias_m,
+                    NULL) > 0) {
+                /* The record's own rule has a term for the code. */
+                CHECK(bwide.status == RTKLIB_SHARED_QUERY_AVAILABLE &&
+                      bwide.bias_flags == RTKLIB_SHARED_BIAS_CROSS_FAMILY &&
+                      same_bits(bwide.raw_code_bias_m, b16.raw_code_bias_m),
+                      "a system-wide code did not use the record's own rule");
+                own_rule++;
+            } else if (system == SYS_CMP) {
                 if (code == CODE_L6I || code == CODE_L6Q || code == CODE_L6X) {
                     CHECK(bwide.status == RTKLIB_SHARED_QUERY_AVAILABLE &&
                           bwide.raw_code_bias_m == 0.0 &&
@@ -1574,10 +1584,10 @@ static int check_stateless_system_wide(const nav_t *nav)
             added++;
         }
     }
-    CHECK(added >= 10 && unchanged > 0 && contained == 0,
+    CHECK(added >= 10 && unchanged > 0 && own_rule > 0 && contained == 0,
           "the system-wide scope was not exercised");
-    printf("PASS stateless system-wide added=%zu unchanged=%zu\n", added,
-           unchanged);
+    printf("PASS stateless system-wide added=%zu own_rule=%zu unchanged=%zu\n",
+           added, own_rule, unchanged);
     return 0;
 }
 
@@ -1593,20 +1603,30 @@ static const eph_t *find_eph(const nav_t *nav, int system, int prn,
     return NULL;
 }
 
-static int set_bias(const rtklib_shared_eph_input_t *active,
-                    const rtklib_shared_eph_input_t *records, uint32_t count,
-                    unsigned char code, uint32_t flags,
-                    rtklib_shared_bias_result_t *result)
+/* mask 0: every family of the code. */
+static int set_bias_mask(const rtklib_shared_eph_input_t *active,
+                         const rtklib_shared_eph_input_t *records,
+                         uint32_t count, unsigned char code, uint32_t mask,
+                         uint32_t flags, rtklib_shared_bias_result_t *result)
 {
     rtklib_shared_state_query_t query;
     int system = internal_system(active->system);
     init_state_query(&query, active->system, active->prn,
+                     mask ? mask :
                      (uint32_t)rtklib_signal_family_mask_ext(system, code), code,
                      active->toe, 0);
     query.reserved[1] = (uint8_t)flags;
     init_bias_result(result);
     return rtklib_shared_bias_eval_eph_set(active, records, count, &query,
                                            result);
+}
+
+static int set_bias(const rtklib_shared_eph_input_t *active,
+                    const rtklib_shared_eph_input_t *records, uint32_t count,
+                    unsigned char code, uint32_t flags,
+                    rtklib_shared_bias_result_t *result)
+{
+    return set_bias_mask(active, records, count, code, 0, flags, result);
 }
 
 /* ABI 1.7 rtklib_shared_bias_eval_eph_set: own-family code bias from the
@@ -1672,6 +1692,14 @@ static int check_group_delay_records(const nav_t *nav)
           same_bits(result.raw_code_bias_m, single.raw_code_bias_m) &&
           result.identity.receive_order == 10,
           "an own-family code used a group-delay record");
+    /* CNAV active alone: L1 C/A (restricted to LNAV) takes the CNAV
+     * record's own T_GD - ISC_L1CA. */
+    CHECK(set_bias_mask(&cnav, NULL, 0, CODE_L1C, NAV_LNAV, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          result.bias_flags == RTKLIB_SHARED_BIAS_CROSS_FAMILY &&
+          fabs(result.raw_code_bias_m -
+               CLIGHT * (g_cnav->tgd[0] - g_cnav->isc[0])) <= 1E-12,
+          "L1 C/A did not take the CNAV record's own rule");
     /* CNAV active, LNAV group delays: L2W takes LNAV's gamma*T_GD. */
     CHECK(set_bias(&cnav, &lnav, 1, CODE_L2W, wide, &result) ==
               RTKLIB_SHARED_OK &&
@@ -1728,6 +1756,13 @@ static int check_group_delay_records(const nav_t *nav)
               RTKLIB_SHARED_OK && result.identity.family == NAV_D1 &&
           fabs(result.raw_code_bias_m - CLIGHT * c_d1->tgd[0]) <= 1E-12,
           "B1I did not take the D1 record's TGD1");
+    /* B-CNAV1 active alone: the B2a pilot (restricted to B-CNAV2) takes its
+     * own TGD_B2ap. */
+    CHECK(set_bias_mask(&cnv1, NULL, 0, CODE_L5P, NAV_CNV2, wide, &result) ==
+              RTKLIB_SHARED_OK &&
+          result.bias_flags == RTKLIB_SHARED_BIAS_CROSS_FAMILY &&
+          fabs(result.raw_code_bias_m - CLIGHT * c_cnv1->tgd[1]) <= 1E-12,
+          "B2a did not take the B-CNAV1 record's own TGD_B2ap");
     CHECK(set_bias(&cnv1, &cnv3, 1, CODE_L2I, wide, &result) ==
               RTKLIB_SHARED_UNSUPPORTED &&
           result.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
