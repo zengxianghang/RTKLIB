@@ -1959,7 +1959,24 @@ static int stateless_query_valid(const rtklib_shared_state_query_t *query,
                                  int *satellite)
 {
     return request_is_valid(query, satellite) &&
-           query->selected_record_id == 0 && query->reserved[0] == 0;
+           query->selected_record_id == 0 && query->reserved[0] == 0 &&
+           (query->reserved[1] == 0 ||
+            query->reserved[1] == RTKLIB_SHARED_EVAL_CHECK_AGE);
+}
+
+/* ABI 1.5: whether the record is within the shared default selection's age
+ * limit at the query's selection time (the same limit and comparison as the
+ * signal selectors). */
+static int stateless_within_age(const stateless_record_t *item,
+                                const rtklib_shared_state_query_t *query)
+{
+    gtime_t toe = item->record.kind == RTKLIB_SHARED_RECORD_GLO_EPH ?
+        item->geph.toe : item->eph.toe;
+    int system = public_system_to_internal(item->record.identity.system);
+
+    if (!(query->reserved[1] & RTKLIB_SHARED_EVAL_CHECK_AGE)) return 1;
+    return fabs(timediff(toe, to_gtime(query->selection_time))) <=
+           rtklib_signal_max_eph_age_ext(system);
 }
 
 static int stateless_eph(const rtklib_shared_eph_input_t *input,
@@ -2009,6 +2026,10 @@ static int stateless_state(const stateless_record_t *item, int valid,
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
     }
+    if (!stateless_within_age(item, query)) {
+        result->status = RTKLIB_SHARED_QUERY_UNAVAILABLE;
+        return RTKLIB_SHARED_UNAVAILABLE;
+    }
     stat = evaluate_payload(&item->record,
                             item->record.kind == RTKLIB_SHARED_RECORD_EPH ?
                                 &item->eph : NULL,
@@ -2045,6 +2066,10 @@ static int stateless_bias(const stateless_record_t *item, int valid,
     if (!record_matches_request(&item->record, query, satellite)) {
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    if (!stateless_within_age(item, query)) {
+        result->status = RTKLIB_SHARED_QUERY_UNAVAILABLE;
+        return RTKLIB_SHARED_UNAVAILABLE;
     }
     return bias_payload(&item->record,
                         item->record.kind == RTKLIB_SHARED_RECORD_EPH ?

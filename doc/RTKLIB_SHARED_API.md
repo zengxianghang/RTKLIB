@@ -4,6 +4,36 @@ This document describes ABI version 1 of `src/rtklib_shared_api.h`.  The
 header is the only downstream compile-time contract.  `nav_t`, `eph_t`,
 `geph_t`, `ion_t` and `gtime_t` remain private to RTKLIB.
 
+## Stateless age check (ABI 1.5)
+
+A stateless evaluation (`rtklib_shared_{state,bias}_eval_{eph,glo_eph}`)
+evaluates the given record at any time, as an explicit-id store query does:
+`eph2pos`/`geph2pos` never check the age of t_oe. With
+`query.reserved[1] = RTKLIB_SHARED_EVAL_CHECK_AGE` the record is evaluated
+only when `|selection_time - toe|` is within the shared default selection's
+age limit for its system. The limits are the RTKLIB `MAXDTOE` constants:
+
+| System | Limit |
+| --- | --- |
+| GPS | 7200 s |
+| QZSS | 7200 s |
+| Galileo | 10800 s |
+| BeiDou | 21600 s |
+| GLONASS | 1800 s |
+
+Outside the limit the call returns `UNAVAILABLE` with the record identity and
+no state or bias. `rtklib_signal_max_eph_age_ext()` is the single source of
+these limits: the signal selectors and this check both use it, with the same
+comparison (`age > limit` is rejected). Stock `seleph` accepts one more
+second; the shared default selection never did. Any other `reserved[1]`
+value is `INVALID_ARGUMENT`.
+
+`test_rtklib_shared_api` checks every fixture record that serves a code. For
+each one it places a store holding only that record against the flagged
+stateless call at offsets straddling the limit on both sides of t_oe:
+-1.5, -0.5, -0.001, 0, +0.001, +0.5 and +1.5 s around the limit. The
+availability and the state are identical.
+
 ## Stateless record evaluation (ABI 1.4)
 
 `rtklib_shared_state_eval_eph()` / `rtklib_shared_state_eval_glo_eph()` and

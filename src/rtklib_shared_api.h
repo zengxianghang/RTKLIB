@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define RTKLIB_SHARED_ABI_MAJOR 1u
-#define RTKLIB_SHARED_ABI_MINOR 4u
+#define RTKLIB_SHARED_ABI_MINOR 5u
 #define RTKLIB_SHARED_ABI_VERSION \
     ((RTKLIB_SHARED_ABI_MAJOR << 16) | RTKLIB_SHARED_ABI_MINOR)
 /* Every ABI 1.x POD keeps the 1.0 layout and size.  A caller may keep
@@ -291,9 +291,19 @@ typedef struct {
      * source-kind filter.  0 keeps the ABI 1.0 unrestricted selector;
      * RTKLIB_SHARED_SOURCE_RINEX / _RECEIVER restrict candidates before
      * the existing family, age and tie-break rules.  Explicit IDs ignore
-     * this filter.  reserved[1..31] remain zero for forward compatibility. */
+     * this filter.  Stateless evaluation (ABI 1.5): reserved[1] is
+     * RTKLIB_SHARED_EVAL_CHECK_AGE or 0, see rtklib_shared_state_eval_eph.
+     * reserved[2..31] remain zero for forward compatibility. */
     uint8_t reserved[32];
 } rtklib_shared_state_query_t;
+
+/* ABI 1.5: query.reserved[1] flag of the stateless evaluation functions.  The
+ * record is evaluated only when |selection_time - toe| is within the age limit
+ * of the shared default selection for its system (GPS 7200 s, QZSS 7200 s,
+ * Galileo 10800 s, BeiDou 21600 s, GLONASS 1800 s, the RTKLIB MAXDTOE
+ * constants); otherwise the call returns UNAVAILABLE with the record identity
+ * and no state or bias. */
+#define RTKLIB_SHARED_EVAL_CHECK_AGE 1u
 
 /* Result PODs are caller-owned inputs at entry: initialize abi_version and
  * struct_size before every query.  Implementations validate those fields
@@ -499,7 +509,10 @@ int rtklib_shared_ion_input_identity(const rtklib_shared_ion_input_t *input,
  * selected_record_id and reserved[0] must be 0; system, prn, rtklib_code,
  * family_mask and glonass_fcn are checked against the record as for an
  * explicit record id (a mismatch is UNSUPPORTED).  The result must declare
- * ABI 1.4 or later. */
+ * ABI 1.4 or later.  With reserved[1] = RTKLIB_SHARED_EVAL_CHECK_AGE (ABI 1.5)
+ * a record outside the default selection's age limit at selection_time is
+ * UNAVAILABLE; without it the record is evaluated at any time, as an
+ * explicit-id store query is. */
 int rtklib_shared_state_eval_eph(const rtklib_shared_eph_input_t *eph,
                                  const rtklib_shared_state_query_t *query,
                                  rtklib_shared_state_result_t *result);

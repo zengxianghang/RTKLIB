@@ -4026,6 +4026,14 @@ static double max_eph_age_sec(int sys)
     return MAXDTOE;
 }
 
+/* Largest |time - toe| (s) at which the signal selectors below accept a
+ * broadcast record of the system: the one age limit of the shared default
+ * selection and of the shared stateless age check. */
+extern double rtklib_signal_max_eph_age_ext(int sys)
+{
+    return sys==SYS_GLO?MAXDTOE_GLO:max_eph_age_sec(sys);
+}
+
 static int canonical_message_type(const eph_t *eph, int sys)
 {
     int type;
@@ -4150,7 +4158,7 @@ static const eph_t *select_signal_eph(gtime_t time, int sat, unsigned char code,
     int i,k,sys,type;
 
     if (!nav||(sys=satsys(sat,NULL))==SYS_NONE) return NULL;
-    max_age=max_eph_age_sec(sys);
+    max_age=rtklib_signal_max_eph_age_ext(sys);
 
     for (k=0;k<SELECT_LOOP_COUNT(candidates,ncandidates,nav->n);k++) {
         double age;
@@ -4197,7 +4205,7 @@ static const geph_t *select_signal_geph(gtime_t time, int sat,
         if (!rtklib_signal_code_supported_ext(SYS_GLO,type,code)) continue;
         if (required_message_mask&&!(type&required_message_mask)) continue;
         age=fabs(timediff(nav->geph[i].toe,time));
-        if (age>MAXDTOE_GLO) continue;
+        if (age>rtklib_signal_max_eph_age_ext(SYS_GLO)) continue;
         if (!best||age<best_age||(fabs(age-best_age)<1E-9&&
             timediff(nav->geph[i].tof,best->tof)>0.0)) {
             best=nav->geph+i;
@@ -4487,7 +4495,7 @@ int rtklib_signal_ephemeris_ext(gtime_t time, int sat, unsigned char code,
         eph=select_generic_eph(time,sat,nav,NULL,NULL,0,&type);
     }
     else {
-        max_age=max_eph_age_sec(sys);
+        max_age=rtklib_signal_max_eph_age_ext(sys);
         for (i=0;i<nav->n;i++) {
             int candidate_type;
             if (nav->eph[i].sat!=sat) continue;
