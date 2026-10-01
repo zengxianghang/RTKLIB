@@ -4,6 +4,69 @@ This document describes ABI version 1 of `src/rtklib_shared_api.h`.  The
 header is the only downstream compile-time contract.  `nav_t`, `eph_t`,
 `geph_t`, `ion_t` and `gtime_t` remain private to RTKLIB.
 
+## System-wide service and group-delay records (ABI 1.7)
+
+Downstream keeps one active ephemeris per satellite, whatever its message
+family, and serves every signal of the satellite with it. The orbits and
+clocks of the families agree; the families differ in their group delays.
+ABI 1.7 adds two pieces for this.
+
+**`RTKLIB_SHARED_EVAL_SYSTEM_WIDE` (`query.reserved[1]` bit 4).** It implies
+`RTKLIB_SHARED_EVAL_CROSS_FAMILY` and widens its scope. The ABI 1.6
+combinations above keep their state, bias and health. The added combinations:
+
+| Record | Codes | Code bias |
+| --- | --- | --- |
+| GPS/QZSS LNAV, CNAV, CNAV-2 | every code of these families outside the record's own | L1 P(Y) `1P/1W/1Y`: `T_GD c`; L2 P(Y) `2P/2W/2Y/2D`: `gamma12 T_GD c` (exact: the three families broadcast the same `T_GD`); any other code: the band-scaled `T_GD c` (`1`, `gamma12`, `(f1/f5)^2`) with `ISC_MISSING` |
+| BDS D1, D2, B-CNAV1/2/3 | every code of these families outside the record's own | B3I `6I/6Q/6X`: `0` (exact: D1/D2 and B-CNAV clocks are referenced to B3I); any other code: UNSUPPORTED, `GROUP_DELAY_MISSING` |
+
+The state is the record's own. Health is UNKNOWN with
+`RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE`. BDS GEO B-CNAV states stay
+contained (`UNSUPPORTED`). Galileo keeps the ABI 1.6 scope.
+
+**`rtklib_shared_bias_eval_eph_set(eph, group_delay_records, count, query,
+result)`.** This is the code bias of the active record `eph` with the group
+delays of other records of the same satellite, for example the latest record
+of each other family. The result must declare ABI 1.7. Every record is
+validated as `rtklib_shared_bias_eval_eph` validates `eph`, and a record of
+another satellite is `INVALID_ARGUMENT`.
+
+1. `eph` must serve the query as for `rtklib_shared_bias_eval_eph`: its own
+   family, or the cross-family scope of the query's flags, and the age check.
+   Otherwise that call's result is returned.
+2. A code of `eph`'s own families uses `eph`'s own rule, exactly as that call.
+3. Otherwise RTKLIB looks for a group-delay record of a family the query
+   requests, within the age limit when `CHECK_AGE` is set, whose own rule has
+   a term for the code. It picks the one with the largest `receive_order`
+   (the first in the array on a tie). The result is that term, with
+   `RTKLIB_SHARED_BIAS_CROSS_FAMILY | RTKLIB_SHARED_BIAS_GROUP_DELAY_RECORD`
+   (8) and that record's identity.
+4. Otherwise `eph`'s cross-family rule applies, as in that call.
+
+Step 3 applies another record's term to `eph`'s clock. That is exact because
+every family of one system shares the clock reference of these rules: the
+GPS/QZSS L1/L2 P(Y) iono-free combination, and BDS B3I. Galileo records are
+never used in step 3, because INAV and FNAV clocks differ.
+
+Examples:
+
+- An LNAV active record with a CNAV group-delay record serves L5Q with
+  `(T_GD - ISC_L5Q5) c` from the CNAV record.
+- A CNAV active record with an LNAV group-delay record serves L2W with
+  `gamma12 T_GD c` from the LNAV record.
+- A B-CNAV1 active record serves B2b with the B-CNAV3 record's `TGD_B2bI`,
+  and B1I with the D1/D2 record's `TGD1`.
+- L5X has no single ISC term in the CNAV rule, so it keeps the active
+  record's cross-family term.
+
+`test_rtklib_shared_api` covers:
+
+- every fixture record against every code of its system, including the
+  RINEX 4.02 BDS codes `5P/7D/1D` beyond `MAXCODE`: 124 added combinations
+  checked against the formulas above, and 51 ABI 1.6 combinations unchanged;
+- the group-delay rules: the terms, the own-family and L5X cases, the age
+  check, receive-order ties, Galileo, and invalid arguments.
+
 ## Stateless cross-family evaluation (ABI 1.6, issue #42)
 
 `query.reserved[1] |= RTKLIB_SHARED_EVAL_CROSS_FAMILY` lets a stateless
