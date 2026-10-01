@@ -4,6 +4,39 @@ This document describes ABI version 1 of `src/rtklib_shared_api.h`.  The
 header is the only downstream compile-time contract.  `nav_t`, `eph_t`,
 `geph_t`, `ion_t` and `gtime_t` remain private to RTKLIB.
 
+## Stateless record evaluation (ABI 1.4)
+
+`rtklib_shared_state_eval_eph()` / `rtklib_shared_state_eval_glo_eph()` and
+`rtklib_shared_bias_eval_eph()` / `rtklib_shared_bias_eval_glo_eph()` evaluate
+one ephemeris given as a public input (`rtklib_shared_eph_input_t` or
+`rtklib_shared_glo_eph_input_t`) at the query's `evaluation_time`, without a
+store.  The input is validated and normalized exactly as the insert functions
+do, and the record is evaluated by the same code as a store query with an
+explicit record id: position, velocity, clock bias and drift, health,
+variance, bias and status are identical.  The result identity is the identity
+the record would have after insertion, with `record_id` 0 and source kind
+`RECEIVER`.
+
+The query's `selected_record_id` and `reserved[0]` (source-kind filter) must
+be 0, since there is nothing to select.  System, PRN, RTKLIB code, family mask
+and GLONASS FCN are checked against the record as for an explicit record id:
+a mismatch is `UNSUPPORTED` and carries the record identity.  The result must
+declare ABI 1.4 or later; ABI 1.4 also selects the split metric/variance
+contract of ABI 1.1.  No call allocates or keeps state.
+
+`rtklib_shared_eph_input_identity()`, `rtklib_shared_glo_eph_input_identity()`
+and `rtklib_shared_ion_input_identity()` return the identity a record would
+have after insertion (`record_id` 0, source kind `RECEIVER`) without a store.
+They return `INVALID_ARGUMENT` exactly when the corresponding insert rejects
+the input, so a caller can validate a receiver record without keeping a
+scratch store.
+
+The `test_rtklib_shared_api` suite compares every fixture record across every
+RTKLIB code and eight evaluation times (inside and far outside the fit
+interval) with insertion followed by an explicit-id query, and every fixture
+EPH, GLONASS and ION identity with the inserted record's: every field is
+identical (doubles bitwise) apart from `record_id`.
+
 ## BDS modern accuracy (ABI 1.3)
 
 `rtklib_shared_bds_sisa_query()` selects the same record as a state query and

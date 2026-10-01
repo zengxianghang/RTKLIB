@@ -686,6 +686,58 @@ static rtklib_shared_record_id_t next_id(rtklib_shared_nav_store_t *store)
     return id;
 }
 
+/* The identity of one record (record_id 0: not yet in a store). */
+static int fill_identity(rtklib_shared_record_identity_t *identity,
+                         uint32_t kind, uint32_t source_kind,
+                         uint32_t system, uint32_t prn, uint32_t family,
+                         int32_t iode, int32_t iodc, int32_t health_raw,
+                         int32_t glonass_fcn, uint64_t receive_order,
+                         rtklib_shared_time_t toe, rtklib_shared_time_t toc,
+                         rtklib_shared_time_t transmit_time,
+                         const char *source_id, const char *subtype)
+{
+    if (!identity || !source_id || !valid_source(source_id)) return 0;
+    init_identity(identity);
+    identity->record_kind = kind;
+    identity->source_kind = source_kind;
+    identity->system = internal_system_to_public((int)system);
+    identity->prn = prn;
+    identity->family = family;
+    identity->iode = iode;
+    identity->iodc = iodc;
+    identity->health_raw = health_raw;
+    identity->glonass_fcn = glonass_fcn;
+    identity->receive_order = receive_order;
+    identity->toe = toe;
+    identity->toc = toc;
+    identity->transmit_time = transmit_time;
+    return copy_text(identity->source_id, sizeof(identity->source_id),
+                     source_id, 1) &&
+           copy_fixed_text(identity->family_subtype,
+                           sizeof(identity->family_subtype),
+                           subtype ? subtype : "");
+}
+
+/* Append a record whose identity is filled; assigns its record id. */
+static int append_record(rtklib_shared_nav_store_t *store,
+                         const rtklib_shared_record_identity_t *identity,
+                         uint32_t kind, int32_t index,
+                         rtklib_shared_record_id_t *record_id)
+{
+    shared_record_t *record;
+
+    if (!store || !identity || !reserve_records(store, store->nrecords + 1))
+        return 0;
+    record = &store->records[store->nrecords];
+    record->identity = *identity;
+    record->identity.record_id = next_id(store);
+    record->kind = kind;
+    record->index = index;
+    store->nrecords++;
+    if (record_id) *record_id = record->identity.record_id;
+    return 1;
+}
+
 static int append_meta(rtklib_shared_nav_store_t *store, uint32_t kind,
                        int32_t index, uint32_t source_kind,
                        uint32_t system, uint32_t prn, uint32_t family,
@@ -696,36 +748,13 @@ static int append_meta(rtklib_shared_nav_store_t *store, uint32_t kind,
                        const char *source_id, const char *subtype,
                        rtklib_shared_record_id_t *record_id)
 {
-    shared_record_t *record;
+    rtklib_shared_record_identity_t identity;
 
-    if (!store || !source_id || !valid_source(source_id) ||
-        !reserve_records(store, store->nrecords + 1)) return 0;
-    record = &store->records[store->nrecords];
-    init_identity(&record->identity);
-    record->identity.record_id = next_id(store);
-    record->identity.record_kind = kind;
-    record->identity.source_kind = source_kind;
-    record->identity.system = internal_system_to_public((int)system);
-    record->identity.prn = prn;
-    record->identity.family = family;
-    record->identity.iode = iode;
-    record->identity.iodc = iodc;
-    record->identity.health_raw = health_raw;
-    record->identity.glonass_fcn = glonass_fcn;
-    record->identity.receive_order = receive_order;
-    record->identity.toe = toe;
-    record->identity.toc = toc;
-    record->identity.transmit_time = transmit_time;
-    if (!copy_text(record->identity.source_id,
-                   sizeof(record->identity.source_id), source_id, 1) ||
-        !copy_fixed_text(record->identity.family_subtype,
-                         sizeof(record->identity.family_subtype),
-                         subtype ? subtype : "")) return 0;
-    record->kind = kind;
-    record->index = index;
-    store->nrecords++;
-    if (record_id) *record_id = record->identity.record_id;
-    return 1;
+    if (!store || !fill_identity(&identity, kind, source_kind, system, prn,
+                                 family, iode, iodc, health_raw, glonass_fcn,
+                                 receive_order, toe, toc, transmit_time,
+                                 source_id, subtype)) return 0;
+    return append_record(store, &identity, kind, index, record_id);
 }
 
 static int append_ion_payload(rtklib_shared_nav_store_t *store,
@@ -759,24 +788,51 @@ static int append_ion_payload(rtklib_shared_nav_store_t *store,
     return 1;
 }
 
-static int append_eph_meta(rtklib_shared_nav_store_t *store, int index,
-                           uint32_t source_kind, uint64_t receive_order,
-                           const char *source_id,
-                           rtklib_shared_record_id_t *record_id)
+static int eph_identity(const eph_t *eph, uint32_t source_kind,
+                        uint64_t receive_order, const char *source_id,
+                        rtklib_shared_record_identity_t *identity)
 {
-    const eph_t *eph = &store->nav.eph[index];
     int system = satsys(eph->sat, NULL);
     uint32_t family = (uint32_t)family_for_eph(eph, system);
     int prn = 0;
 
     (void)satsys(eph->sat, &prn);
     if (!system || !family || !valid_source(source_id)) return 0;
-    return append_meta(store, RTKLIB_SHARED_RECORD_EPH, index, source_kind,
-                       (uint32_t)system, (uint32_t)prn, family, eph->iode,
-                       eph->iodc, eph->svh, INT32_MIN, receive_order,
-                       from_gtime(eph->toe), from_gtime(eph->toc),
-                       from_gtime(eph->ttr), source_id, eph->hdr.subtype,
-                       record_id);
+    return fill_identity(identity, RTKLIB_SHARED_RECORD_EPH, source_kind,
+                         (uint32_t)system, (uint32_t)prn, family, eph->iode,
+                         eph->iodc, eph->svh, INT32_MIN, receive_order,
+                         from_gtime(eph->toe), from_gtime(eph->toc),
+                         from_gtime(eph->ttr), source_id, eph->hdr.subtype);
+}
+
+static int geph_identity(const geph_t *geph, uint32_t source_kind,
+                         uint64_t receive_order, const char *source_id,
+                         rtklib_shared_record_identity_t *identity)
+{
+    int system = satsys(geph->sat, NULL);
+    int prn = 0;
+    uint32_t family = (uint32_t)family_for_geph(geph);
+
+    (void)satsys(geph->sat, &prn);
+    if (system != SYS_GLO || !family || !valid_source(source_id)) return 0;
+    return fill_identity(identity, RTKLIB_SHARED_RECORD_GLO_EPH, source_kind,
+                         (uint32_t)system, (uint32_t)prn, family,
+                         geph->iode, -1, geph->svh, geph->frq, receive_order,
+                         from_gtime(geph->toe), from_gtime(geph->toe),
+                         from_gtime(geph->tof), source_id, geph->hdr.subtype);
+}
+
+static int append_eph_meta(rtklib_shared_nav_store_t *store, int index,
+                           uint32_t source_kind, uint64_t receive_order,
+                           const char *source_id,
+                           rtklib_shared_record_id_t *record_id)
+{
+    rtklib_shared_record_identity_t identity;
+
+    if (!eph_identity(&store->nav.eph[index], source_kind, receive_order,
+                      source_id, &identity)) return 0;
+    return append_record(store, &identity, RTKLIB_SHARED_RECORD_EPH, index,
+                         record_id);
 }
 
 static int append_geph_meta(rtklib_shared_nav_store_t *store, int index,
@@ -784,19 +840,12 @@ static int append_geph_meta(rtklib_shared_nav_store_t *store, int index,
                             const char *source_id,
                             rtklib_shared_record_id_t *record_id)
 {
-    const geph_t *geph = &store->nav.geph[index];
-    int system = satsys(geph->sat, NULL);
-    int prn = 0;
-    uint32_t family = (uint32_t)family_for_geph(geph);
+    rtklib_shared_record_identity_t identity;
 
-    (void)satsys(geph->sat, &prn);
-    if (system != SYS_GLO || !family || !valid_source(source_id)) return 0;
-    return append_meta(store, RTKLIB_SHARED_RECORD_GLO_EPH, index,
-                       source_kind, (uint32_t)system, (uint32_t)prn, family,
-                       geph->iode, -1, geph->svh, geph->frq, receive_order,
-                       from_gtime(geph->toe), from_gtime(geph->toe),
-                       from_gtime(geph->tof), source_id, geph->hdr.subtype,
-                       record_id);
+    if (!geph_identity(&store->nav.geph[index], source_kind, receive_order,
+                       source_id, &identity)) return 0;
+    return append_record(store, &identity, RTKLIB_SHARED_RECORD_GLO_EPH,
+                         index, record_id);
 }
 
 static int identity_for_record(const shared_record_t *record,
@@ -1199,6 +1248,41 @@ static int valid_glo_input(const rtklib_shared_glo_eph_input_t *input,
     return 1;
 }
 
+static void fill_geph_from_input(geph_t *geph,
+                                 const rtklib_shared_glo_eph_input_t *input,
+                                 int satellite)
+{
+    memset(geph, 0, sizeof(*geph));
+    geph->sat = satellite;
+    geph->iode = input->iode;
+    geph->frq = input->glonass_fcn;
+    geph->svh = input->health_raw;
+    geph->sva = input->sva;
+    geph->age = input->age;
+    geph->flag = input->flags;
+    geph->svhflag = input->health_flags;
+    geph->data_validity = input->data_validity;
+    geph->toe = to_gtime(input->toe);
+    geph->tof = to_gtime(input->transmit_time);
+    memcpy(geph->pos, input->position_ecef_m, sizeof(geph->pos));
+    memcpy(geph->vel, input->velocity_ecef_mps, sizeof(geph->vel));
+    memcpy(geph->acc, input->acceleration_ecef_mps2, sizeof(geph->acc));
+    geph->taun = -input->clock_bias_s;
+    geph->gamn = input->relative_frequency_bias;
+    geph->beta = input->beta;
+    geph->dtaun = input->dtaun_s;
+    geph->tgd_l2ocp = input->tgd_l2ocp_s;
+    geph->isc_l3ocp = input->isc_l3ocp_s;
+    memcpy(geph->pc, input->antenna_phase_center_offset_m, sizeof(geph->pc));
+    geph->ttm = input->raw_transmit_sow;
+    geph->hdr.data_type = NAV_EPH;
+    geph->hdr.sys = SYS_GLO;
+    geph->hdr.prn = (int)input->prn;
+    geph->hdr.msg_type = (int)input->family;
+    copy_fixed_text(geph->hdr.subtype, sizeof(geph->hdr.subtype),
+                    input->family_subtype);
+}
+
 int rtklib_shared_nav_insert_glo_eph(rtklib_shared_nav_store_t *store,
                                      const rtklib_shared_glo_eph_input_t *input,
                                      rtklib_shared_record_id_t *record_id)
@@ -1212,35 +1296,7 @@ int rtklib_shared_nav_insert_glo_eph(rtklib_shared_nav_store_t *store,
     if (!reserve_records(store, store->nrecords + 1) ||
         !reserve_nav_geph(&store->nav, (size_t)store->nav.ng + 1))
         return RTKLIB_SHARED_ALLOCATION_ERROR;
-    memset(&geph, 0, sizeof(geph));
-    geph.sat = satellite;
-    geph.iode = input->iode;
-    geph.frq = input->glonass_fcn;
-    geph.svh = input->health_raw;
-    geph.sva = input->sva;
-    geph.age = input->age;
-    geph.flag = input->flags;
-    geph.svhflag = input->health_flags;
-    geph.data_validity = input->data_validity;
-    geph.toe = to_gtime(input->toe);
-    geph.tof = to_gtime(input->transmit_time);
-    memcpy(geph.pos, input->position_ecef_m, sizeof(geph.pos));
-    memcpy(geph.vel, input->velocity_ecef_mps, sizeof(geph.vel));
-    memcpy(geph.acc, input->acceleration_ecef_mps2, sizeof(geph.acc));
-    geph.taun = -input->clock_bias_s;
-    geph.gamn = input->relative_frequency_bias;
-    geph.beta = input->beta;
-    geph.dtaun = input->dtaun_s;
-    geph.tgd_l2ocp = input->tgd_l2ocp_s;
-    geph.isc_l3ocp = input->isc_l3ocp_s;
-    memcpy(geph.pc, input->antenna_phase_center_offset_m, sizeof(geph.pc));
-    geph.ttm = input->raw_transmit_sow;
-    geph.hdr.data_type = NAV_EPH;
-    geph.hdr.sys = SYS_GLO;
-    geph.hdr.prn = (int)input->prn;
-    geph.hdr.msg_type = (int)input->family;
-    copy_fixed_text(geph.hdr.subtype, sizeof(geph.hdr.subtype),
-                    input->family_subtype);
+    fill_geph_from_input(&geph, input, satellite);
     index = store->nav.ng++;
     store->nav.geph[index] = geph;
     if (!append_geph_meta(store, index, RTKLIB_SHARED_SOURCE_RECEIVER,
@@ -1253,18 +1309,17 @@ int rtklib_shared_nav_insert_glo_eph(rtklib_shared_nav_store_t *store,
     return RTKLIB_SHARED_OK;
 }
 
-int rtklib_shared_nav_insert_ion(rtklib_shared_nav_store_t *store,
-                                 const rtklib_shared_ion_input_t *input,
-                                 rtklib_shared_record_id_t *record_id)
+/* Validation of an ION input, shared by the insert and the stateless
+ * identity (ABI 1.4). */
+static int valid_ion_input(const rtklib_shared_ion_input_t *input,
+                           int *system)
 {
-    ion_t ion;
-    int system;
     size_t i;
 
-    if (!store || !input || !valid_header(input->abi_version,
-                                          input->struct_size, sizeof(*input)) ||
-        !(system = public_system_to_internal(input->system)) ||
-        !valid_ion_family_for_system(system, input->family) ||
+    if (!input || !valid_header(input->abi_version,
+                                input->struct_size, sizeof(*input)) ||
+        !(*system = public_system_to_internal(input->system)) ||
+        !valid_ion_family_for_system(*system, input->family) ||
         !valid_shared_time(input->transmit_time) ||
         !valid_source(input->source_id) ||
         !valid_fixed_text(input->family_subtype,
@@ -1272,10 +1327,22 @@ int rtklib_shared_nav_insert_ion(rtklib_shared_nav_store_t *store,
         input->receive_order == 0 ||
         input->value_count == 0 || input->value_count > 32 ||
         !finite_array(input->values, input->value_count))
-        return RTKLIB_SHARED_INVALID_ARGUMENT;
+        return 0;
     for (i = 0; i < input->value_count; ++i) {
-        if (input->present[i] > 1) return RTKLIB_SHARED_INVALID_ARGUMENT;
+        if (input->present[i] > 1) return 0;
     }
+    return 1;
+}
+
+int rtklib_shared_nav_insert_ion(rtklib_shared_nav_store_t *store,
+                                 const rtklib_shared_ion_input_t *input,
+                                 rtklib_shared_record_id_t *record_id)
+{
+    ion_t ion;
+    int system;
+
+    if (!store || !valid_ion_input(input, &system))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
     if (!reserve_records(store, store->nrecords + 1) ||
         !reserve_ions(store, store->nion_records + 1))
         return RTKLIB_SHARED_ALLOCATION_ERROR;
@@ -1606,11 +1673,13 @@ static const shared_record_t *record_for_query(
 /* metric_split: the caller declared ABI >= 1.1, so a record whose accuracy
  * is not a scalar metric SVA publishes its state with variance_status
  * UNSUPPORTED instead of being contained as a whole (Issue #20). */
-static int evaluate_record(const rtklib_shared_nav_store_t *store,
-                           const shared_record_t *record,
-                           rtklib_shared_time_t evaluation_time,
-                           unsigned char code, int metric_split,
-                           rtklib_shared_state_result_t *result)
+/* State of one record from its payload (eph for EPH, geph for GLO_EPH):
+ * shared by the store queries and the stateless evaluation (ABI 1.4). */
+static int evaluate_payload(const shared_record_t *record, const eph_t *eph,
+                            const geph_t *geph,
+                            rtklib_shared_time_t evaluation_time,
+                            unsigned char code, int metric_split,
+                            rtklib_shared_state_result_t *result)
 {
     double state[6] = {0}, next_state[6] = {0};
     double dts[2] = {0}, next_dts[2] = {0}, variance = 0.0, next_var = 0.0;
@@ -1618,12 +1687,10 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
     gtime_t next_time = timeadd(time, 1E-3);
     int system, stat = 1;
 
-    if (!store || !record || !result) return RTKLIB_SHARED_INVALID_ARGUMENT;
+    if (!record || !result) return RTKLIB_SHARED_INVALID_ARGUMENT;
     system = public_system_to_internal(record->identity.system);
     if (record->kind == RTKLIB_SHARED_RECORD_EPH) {
-        const eph_t *eph;
-        if (record->index < 0 || record->index >= store->nav.n) return 0;
-        eph = &store->nav.eph[record->index];
+        if (!eph) return 0;
         if ((is_modern_gps_qzs_urai_record(record) && !metric_split) ||
             is_bds_geo_bcnav_record(record)) {
             /* The state query is deliberately all-or-nothing for this
@@ -1638,9 +1705,7 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
         eph2pos(next_time, eph, next_state, next_dts, &next_var);
         result->health_raw = eph->svh;
     } else if (record->kind == RTKLIB_SHARED_RECORD_GLO_EPH) {
-        const geph_t *geph;
-        if (record->index < 0 || record->index >= store->nav.ng) return 0;
-        geph = &store->nav.geph[record->index];
+        if (!geph) return 0;
         geph2pos(time, geph, state, dts, &variance);
         geph2pos(next_time, geph, next_state, next_dts, &next_var);
         result->health_raw = geph->svh;
@@ -1669,6 +1734,27 @@ static int evaluate_record(const rtklib_shared_nav_store_t *store,
     result->state_valid = 1;
     set_state_health(result, system, record->identity.family, code);
     return stat;
+}
+
+static int evaluate_record(const rtklib_shared_nav_store_t *store,
+                           const shared_record_t *record,
+                           rtklib_shared_time_t evaluation_time,
+                           unsigned char code, int metric_split,
+                           rtklib_shared_state_result_t *result)
+{
+    const eph_t *eph = NULL;
+    const geph_t *geph = NULL;
+
+    if (!store || !record || !result) return RTKLIB_SHARED_INVALID_ARGUMENT;
+    if (record->kind == RTKLIB_SHARED_RECORD_EPH) {
+        if (record->index < 0 || record->index >= store->nav.n) return 0;
+        eph = &store->nav.eph[record->index];
+    } else if (record->kind == RTKLIB_SHARED_RECORD_GLO_EPH) {
+        if (record->index < 0 || record->index >= store->nav.ng) return 0;
+        geph = &store->nav.geph[record->index];
+    }
+    return evaluate_payload(record, eph, geph, evaluation_time, code,
+                            metric_split, result);
 }
 
 int rtklib_shared_state_query(const rtklib_shared_nav_store_t *store,
@@ -1723,13 +1809,46 @@ int rtklib_shared_state_query(const rtklib_shared_nav_store_t *store,
     return RTKLIB_SHARED_OK;
 }
 
+/* Code bias of one record from its payload: shared by the store query and
+ * the stateless evaluation (ABI 1.4). */
+static int bias_payload(const shared_record_t *record, const eph_t *eph,
+                        const geph_t *geph, unsigned char code,
+                        rtklib_shared_bias_result_t *result)
+{
+    double bias = NAN;
+    int stat;
+
+    if (record->kind == RTKLIB_SHARED_RECORD_GLO_EPH && geph) {
+        stat = rtklib_signal_code_bias_selected_ext(
+            SYS_GLO, (int)record->identity.family, code, NULL, geph, &bias,
+            NULL);
+    } else if (record->kind == RTKLIB_SHARED_RECORD_EPH && eph) {
+        stat = rtklib_signal_code_bias_selected_ext(
+            public_system_to_internal(record->identity.system),
+            (int)record->identity.family, code, eph, NULL, &bias, NULL);
+    } else {
+        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    if (stat < 0) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    if (stat == 0) {
+        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    result->raw_code_bias_m = bias;
+    result->status = RTKLIB_SHARED_QUERY_AVAILABLE;
+    return RTKLIB_SHARED_OK;
+}
+
 int rtklib_shared_bias_query(const rtklib_shared_nav_store_t *store,
                              const rtklib_shared_state_query_t *query,
                              rtklib_shared_bias_result_t *result)
 {
     const shared_record_t *record;
-    int satellite, selection_error, stat;
-    double bias = NAN;
+    int satellite, selection_error;
 
     if (!result || !valid_header(result->abi_version, result->struct_size,
                                  sizeof(*result)))
@@ -1753,38 +1872,222 @@ int rtklib_shared_bias_query(const rtklib_shared_nav_store_t *store,
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
     }
-    if (record->kind == RTKLIB_SHARED_RECORD_GLO_EPH) {
-        if (record->index < 0 || record->index >= store->nav.ng) {
-            result->status = RTKLIB_SHARED_QUERY_FAILED;
-            return RTKLIB_SHARED_CALL_FAILED;
-        }
-        stat = rtklib_signal_code_bias_selected_ext(
-            SYS_GLO, (int)record->identity.family, query->rtklib_code, NULL,
-            &store->nav.geph[record->index], &bias, NULL);
-    } else if (record->kind == RTKLIB_SHARED_RECORD_EPH) {
-        if (record->index < 0 || record->index >= store->nav.n) {
-            result->status = RTKLIB_SHARED_QUERY_FAILED;
-            return RTKLIB_SHARED_CALL_FAILED;
-        }
-        stat = rtklib_signal_code_bias_selected_ext(
-            public_system_to_internal(record->identity.system),
-            (int)record->identity.family, query->rtklib_code,
-            &store->nav.eph[record->index], NULL, &bias, NULL);
-    } else {
-        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
-        return RTKLIB_SHARED_UNSUPPORTED;
-    }
-    if (stat < 0) {
+    if ((record->kind == RTKLIB_SHARED_RECORD_GLO_EPH &&
+         (record->index < 0 || record->index >= store->nav.ng)) ||
+        (record->kind == RTKLIB_SHARED_RECORD_EPH &&
+         (record->index < 0 || record->index >= store->nav.n))) {
         result->status = RTKLIB_SHARED_QUERY_FAILED;
         return RTKLIB_SHARED_CALL_FAILED;
     }
-    if (stat == 0) {
+    return bias_payload(record,
+        record->kind == RTKLIB_SHARED_RECORD_EPH ?
+            &store->nav.eph[record->index] : NULL,
+        record->kind == RTKLIB_SHARED_RECORD_GLO_EPH ?
+            &store->nav.geph[record->index] : NULL,
+        query->rtklib_code, result);
+}
+
+/* ABI 1.4: the identity a record would have after insertion, without a
+ * store.  INVALID_ARGUMENT exactly when the insert rejects the input; the
+ * identity carries record_id 0 and source kind RECEIVER. */
+static int valid_identity_output(const rtklib_shared_record_identity_t *identity)
+{
+    return identity && valid_header(identity->abi_version,
+                                    identity->struct_size, sizeof(*identity));
+}
+
+int rtklib_shared_eph_input_identity(const rtklib_shared_eph_input_t *input,
+                                     rtklib_shared_record_identity_t *identity)
+{
+    eph_t eph;
+    int system, satellite;
+
+    if (!valid_identity_output(identity) ||
+        !valid_common_eph_input(input, &system, &satellite))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    fill_eph_from_input(&eph, input, system, satellite);
+    return eph_identity(&eph, RTKLIB_SHARED_SOURCE_RECEIVER,
+                        input->receive_order, input->source_id, identity) ?
+        RTKLIB_SHARED_OK : RTKLIB_SHARED_INVALID_ARGUMENT;
+}
+
+int rtklib_shared_glo_eph_input_identity(
+    const rtklib_shared_glo_eph_input_t *input,
+    rtklib_shared_record_identity_t *identity)
+{
+    geph_t geph;
+    int satellite;
+
+    if (!valid_identity_output(identity) || !valid_glo_input(input, &satellite))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    fill_geph_from_input(&geph, input, satellite);
+    return geph_identity(&geph, RTKLIB_SHARED_SOURCE_RECEIVER,
+                         input->receive_order, input->source_id, identity) ?
+        RTKLIB_SHARED_OK : RTKLIB_SHARED_INVALID_ARGUMENT;
+}
+
+int rtklib_shared_ion_input_identity(const rtklib_shared_ion_input_t *input,
+                                     rtklib_shared_record_identity_t *identity)
+{
+    int system;
+
+    if (!valid_identity_output(identity) || !valid_ion_input(input, &system))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    return fill_identity(identity, RTKLIB_SHARED_RECORD_ION,
+                         RTKLIB_SHARED_SOURCE_RECEIVER, (uint32_t)system, 0,
+                         input->family, -1, -1, -1, INT32_MIN,
+                         input->receive_order, input->transmit_time,
+                         input->transmit_time, input->transmit_time,
+                         input->source_id, input->family_subtype) ?
+        RTKLIB_SHARED_OK : RTKLIB_SHARED_INVALID_ARGUMENT;
+}
+
+/* ABI 1.4: evaluation of one record given as a public input, without a
+ * store.  The input is validated and normalized exactly as the insert
+ * functions do; the record is then evaluated by the same code as a store
+ * query with its explicit record id, so the results are identical.  The
+ * query must not select a record or a source (selected_record_id and
+ * reserved[0] are 0); the result identity carries record_id 0 and source
+ * kind RECEIVER. */
+typedef struct {
+    shared_record_t record;
+    eph_t eph;
+    geph_t geph;
+} stateless_record_t;
+
+static int stateless_query_valid(const rtklib_shared_state_query_t *query,
+                                 int *satellite)
+{
+    return request_is_valid(query, satellite) &&
+           query->selected_record_id == 0 && query->reserved[0] == 0;
+}
+
+static int stateless_eph(const rtklib_shared_eph_input_t *input,
+                         stateless_record_t *out)
+{
+    int system, satellite;
+    if (!valid_common_eph_input(input, &system, &satellite)) return 0;
+    fill_eph_from_input(&out->eph, input, system, satellite);
+    out->record.kind = RTKLIB_SHARED_RECORD_EPH;
+    out->record.index = -1;
+    return eph_identity(&out->eph, RTKLIB_SHARED_SOURCE_RECEIVER,
+                        input->receive_order, input->source_id,
+                        &out->record.identity);
+}
+
+static int stateless_geph(const rtklib_shared_glo_eph_input_t *input,
+                          stateless_record_t *out)
+{
+    int satellite;
+    if (!valid_glo_input(input, &satellite)) return 0;
+    fill_geph_from_input(&out->geph, input, satellite);
+    out->record.kind = RTKLIB_SHARED_RECORD_GLO_EPH;
+    out->record.index = -1;
+    return geph_identity(&out->geph, RTKLIB_SHARED_SOURCE_RECEIVER,
+                         input->receive_order, input->source_id,
+                         &out->record.identity);
+}
+
+static int stateless_state(const stateless_record_t *item, int valid,
+                           const rtklib_shared_state_query_t *query,
+                           rtklib_shared_state_result_t *result)
+{
+    int satellite, stat;
+    uint32_t declared;
+
+    if (!result || !valid_header(result->abi_version, result->struct_size,
+                                 sizeof(*result)) ||
+        !declares_minor(result->abi_version, 4))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    declared = result->abi_version;
+    init_state_result(result);
+    result->abi_version = declared;
+    if (!valid || !stateless_query_valid(query, &satellite))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    result->identity = item->record.identity;
+    if (!record_matches_request(&item->record, query, satellite)) {
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
     }
-    result->raw_code_bias_m = bias;
+    stat = evaluate_payload(&item->record,
+                            item->record.kind == RTKLIB_SHARED_RECORD_EPH ?
+                                &item->eph : NULL,
+                            item->record.kind == RTKLIB_SHARED_RECORD_GLO_EPH ?
+                                &item->geph : NULL,
+                            query->evaluation_time, query->rtklib_code, 1,
+                            result);
+    if (stat == RTKLIB_SHARED_UNSUPPORTED) {
+        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    if (stat <= 0) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
     result->status = RTKLIB_SHARED_QUERY_AVAILABLE;
     return RTKLIB_SHARED_OK;
+}
+
+static int stateless_bias(const stateless_record_t *item, int valid,
+                          const rtklib_shared_state_query_t *query,
+                          rtklib_shared_bias_result_t *result)
+{
+    int satellite;
+
+    if (!result || !valid_header(result->abi_version, result->struct_size,
+                                 sizeof(*result)) ||
+        !declares_minor(result->abi_version, 4))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    init_bias_result(result);
+    if (!valid || !stateless_query_valid(query, &satellite))
+        return RTKLIB_SHARED_INVALID_ARGUMENT;
+    result->identity = item->record.identity;
+    if (!record_matches_request(&item->record, query, satellite)) {
+        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    return bias_payload(&item->record,
+                        item->record.kind == RTKLIB_SHARED_RECORD_EPH ?
+                            &item->eph : NULL,
+                        item->record.kind == RTKLIB_SHARED_RECORD_GLO_EPH ?
+                            &item->geph : NULL,
+                        query->rtklib_code, result);
+}
+
+int rtklib_shared_state_eval_eph(const rtklib_shared_eph_input_t *eph,
+                                 const rtklib_shared_state_query_t *query,
+                                 rtklib_shared_state_result_t *result)
+{
+    stateless_record_t item;
+    int valid = stateless_eph(eph, &item);
+    return stateless_state(&item, valid, query, result);
+}
+
+int rtklib_shared_state_eval_glo_eph(const rtklib_shared_glo_eph_input_t *geph,
+                                     const rtklib_shared_state_query_t *query,
+                                     rtklib_shared_state_result_t *result)
+{
+    stateless_record_t item;
+    int valid = stateless_geph(geph, &item);
+    return stateless_state(&item, valid, query, result);
+}
+
+int rtklib_shared_bias_eval_eph(const rtklib_shared_eph_input_t *eph,
+                                const rtklib_shared_state_query_t *query,
+                                rtklib_shared_bias_result_t *result)
+{
+    stateless_record_t item;
+    int valid = stateless_eph(eph, &item);
+    return stateless_bias(&item, valid, query, result);
+}
+
+int rtklib_shared_bias_eval_glo_eph(const rtklib_shared_glo_eph_input_t *geph,
+                                    const rtklib_shared_state_query_t *query,
+                                    rtklib_shared_bias_result_t *result)
+{
+    stateless_record_t item;
+    int valid = stateless_geph(geph, &item);
+    return stateless_bias(&item, valid, query, result);
 }
 
 /* Nominal URA value X (metres) of a CNAV URA_ED / URA_NED0 index N in

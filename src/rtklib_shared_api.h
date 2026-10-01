@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define RTKLIB_SHARED_ABI_MAJOR 1u
-#define RTKLIB_SHARED_ABI_MINOR 3u
+#define RTKLIB_SHARED_ABI_MINOR 4u
 #define RTKLIB_SHARED_ABI_VERSION \
     ((RTKLIB_SHARED_ABI_MAJOR << 16) | RTKLIB_SHARED_ABI_MINOR)
 /* Every ABI 1.x POD keeps the 1.0 layout and size.  A caller may keep
@@ -478,6 +478,40 @@ int rtklib_shared_modern_ura_query(const rtklib_shared_nav_store_t *store,
 int rtklib_shared_bds_sisa_query(const rtklib_shared_nav_store_t *store,
                                  const rtklib_shared_state_query_t *query,
                                  rtklib_shared_bds_sisa_result_t *result);
+/* ABI 1.4: the identity a record would have after insertion, without a store.
+ * The input is validated exactly as the insert functions validate it:
+ * INVALID_ARGUMENT exactly when the corresponding insert rejects it.  On OK the
+ * identity equals the inserted record's identity except that record_id is 0
+ * (source kind RECEIVER).  identity must carry a valid ABI header. */
+int rtklib_shared_eph_input_identity(const rtklib_shared_eph_input_t *input,
+                                     rtklib_shared_record_identity_t *identity);
+int rtklib_shared_glo_eph_input_identity(
+    const rtklib_shared_glo_eph_input_t *input,
+    rtklib_shared_record_identity_t *identity);
+int rtklib_shared_ion_input_identity(const rtklib_shared_ion_input_t *input,
+                                     rtklib_shared_record_identity_t *identity);
+
+/* ABI 1.4: evaluate one ephemeris given as a public input, without a store.
+ * The input is validated exactly as the insert functions validate it, and the
+ * record is evaluated by the same code as a store query with its explicit
+ * record id: the state, bias, health and identity are identical, except that
+ * the identity's record_id is 0 (source kind RECEIVER).  The query's
+ * selected_record_id and reserved[0] must be 0; system, prn, rtklib_code,
+ * family_mask and glonass_fcn are checked against the record as for an
+ * explicit record id (a mismatch is UNSUPPORTED).  The result must declare
+ * ABI 1.4 or later. */
+int rtklib_shared_state_eval_eph(const rtklib_shared_eph_input_t *eph,
+                                 const rtklib_shared_state_query_t *query,
+                                 rtklib_shared_state_result_t *result);
+int rtklib_shared_state_eval_glo_eph(const rtklib_shared_glo_eph_input_t *geph,
+                                     const rtklib_shared_state_query_t *query,
+                                     rtklib_shared_state_result_t *result);
+int rtklib_shared_bias_eval_eph(const rtklib_shared_eph_input_t *eph,
+                                const rtklib_shared_state_query_t *query,
+                                rtklib_shared_bias_result_t *result);
+int rtklib_shared_bias_eval_glo_eph(const rtklib_shared_glo_eph_input_t *geph,
+                                    const rtklib_shared_state_query_t *query,
+                                    rtklib_shared_bias_result_t *result);
 int rtklib_shared_ion_query(const rtklib_shared_nav_store_t *store,
                             uint32_t system, uint32_t family_mask,
                             rtklib_shared_time_t evaluation_time,
