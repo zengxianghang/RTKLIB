@@ -13,12 +13,24 @@ ABI 1.7 adds two pieces for this.
 
 **`RTKLIB_SHARED_EVAL_SYSTEM_WIDE` (`query.reserved[1]` bit 4).** It implies
 `RTKLIB_SHARED_EVAL_CROSS_FAMILY` and widens its scope. The ABI 1.6
-combinations above keep their state, bias and health. The added combinations:
+combinations above keep their state, bias and health.
 
-| Record | Codes | Code bias |
-| --- | --- | --- |
-| GPS/QZSS LNAV, CNAV, CNAV-2 | every code of these families outside the record's own | L1 P(Y) `1P/1W/1Y`: `T_GD c`; L2 P(Y) `2P/2W/2Y/2D`: `gamma12 T_GD c` (exact: the three families broadcast the same `T_GD`); any other code: the band-scaled `T_GD c` (`1`, `gamma12`, `(f1/f5)^2`) with `ISC_MISSING` |
-| BDS D1, D2, B-CNAV1/2/3 | every code of these families outside the record's own | B3I `6I/6Q/6X`: `0` (exact: D1/D2 and B-CNAV clocks are referenced to B3I); any other code: UNSUPPORTED, `GROUP_DELAY_MISSING` |
+The added combinations are every code of these families outside the record's
+own (the query's `family_mask`):
+
+- GPS/QZSS LNAV, CNAV, CNAV-2;
+- BDS D1, D2, B-CNAV1/2/3.
+
+Their code bias is the record's own RTKLIB rule when that rule has a term for
+the code. Examples are a CNAV record's L1 C/A `(T_GD - ISC_L1CA) c`, and a
+B-CNAV1 record's B2a pilot `TGD_B2ap c`. Downstream may restrict a signal to
+the family it is broadcast on, for example L1 C/A to LNAV, which makes these
+cross-family. Otherwise:
+
+| System | Code bias |
+| --- | --- |
+| GPS/QZSS | L1 P(Y) `1P/1W/1Y`: `T_GD c`; L2 P(Y) `2P/2W/2Y/2D`: `gamma12 T_GD c` (exact: the three families broadcast the same `T_GD`); any other code: the band-scaled `T_GD c` (`1`, `gamma12`, `(f1/f5)^2`) with `ISC_MISSING` |
+| BDS | B3I `6I/6Q/6X`: `0` (exact: D1/D2 and B-CNAV clocks are referenced to B3I); any other code: UNSUPPORTED, `GROUP_DELAY_MISSING` |
 
 The state is the record's own. Health is UNKNOWN with
 `RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE`. BDS GEO B-CNAV states stay
@@ -63,9 +75,11 @@ Examples:
 
 - every fixture record against every code of its system, including the
   RINEX 4.02 BDS codes `5P/7D/1D` beyond `MAXCODE`: 124 added combinations
-  checked against the formulas above, and 51 ABI 1.6 combinations unchanged;
-- the group-delay rules: the terms, the own-family and L5X cases, the age
-  check, receive-order ties, Galileo, and invalid arguments.
+  (48 by the record's own rule) checked against the rules above, and 51
+  ABI 1.6 combinations unchanged;
+- the group-delay rules: the terms, the own-family and L5X cases, the own
+  rule of a CNAV record for L1 C/A and of a B-CNAV1 record for the B2a pilot,
+  the age check, receive-order ties, Galileo, and invalid arguments.
 
 ## Stateless cross-family evaluation (ABI 1.6, issue #42)
 

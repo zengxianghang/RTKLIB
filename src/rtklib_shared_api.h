@@ -344,12 +344,14 @@ typedef struct {
  *     those families (GEO B-CNAV states stay contained);
  *   - Galileo: the ABI 1.6 scope.
  * It implies RTKLIB_SHARED_EVAL_CROSS_FAMILY; the ABI 1.6 combinations keep
- * their state, bias and health.  The added combinations:
- *   - GPS/QZSS code bias: L1 P(Y) T_GD and L2 P(Y) gamma*T_GD exactly (CNAV
- *     and CNAV-2 broadcast the same T_GD); any other code the band-scaled
- *     T_GD with RTKLIB_SHARED_BIAS_ISC_MISSING;
- *   - BDS code bias: B3I 0 exactly (D1/D2 and B-CNAV clocks are referenced
- *     to B3I); any other code UNSUPPORTED with _GROUP_DELAY_MISSING;
+ * their state, bias and health.  The added combinations' code bias is the
+ * record's own rule when it has a term for the code (for example CNAV
+ * L1 C/A T_GD - ISC_L1CA, B-CNAV1 B2a pilot TGD_B2ap); otherwise:
+ *   - GPS/QZSS: L1 P(Y) T_GD and L2 P(Y) gamma*T_GD exactly (CNAV and
+ *     CNAV-2 broadcast the same T_GD); any other code the band-scaled T_GD
+ *     with RTKLIB_SHARED_BIAS_ISC_MISSING;
+ *   - BDS: B3I 0 exactly (D1/D2 and B-CNAV clocks are referenced to B3I);
+ *     any other code UNSUPPORTED with _GROUP_DELAY_MISSING;
  *   - health: UNKNOWN with RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE. */
 #define RTKLIB_SHARED_EVAL_SYSTEM_WIDE 4u
 /* ABI 1.7: the code bias was taken from one of the group-delay records of

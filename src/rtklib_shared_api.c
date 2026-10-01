@@ -2090,13 +2090,19 @@ static int cross_family_health_applies(int system)
 
 /* ABI 1.7 code bias of a system-wide combination outside the ABI 1.6 scope;
  * see RTKLIB_SHARED_EVAL_SYSTEM_WIDE. */
-static int system_wide_bias(const eph_t *eph, int system, unsigned char code,
+static int system_wide_bias(const eph_t *eph, int system, uint32_t family,
+                            unsigned char code,
                             rtklib_shared_bias_result_t *result)
 {
     char band = code_band(code);
     double bias = NAN;
 
-    if (system == SYS_CMP) {
+    if (rtklib_signal_code_bias_selected_ext(system, (int)family, code, eph,
+                                             NULL, &bias, NULL) > 0) {
+        /* The record's own rule (for example CNAV L1 C/A T_GD - ISC_L1CA,
+         * B-CNAV1 B2a pilot TGD_B2ap). */
+    }
+    else if (system == SYS_CMP) {
         if (code == CODE_L6I || code == CODE_L6Q || code == CODE_L6X)
             bias = 0.0;
         else {
@@ -2137,7 +2143,7 @@ static int cross_family_bias(const stateless_record_t *item, unsigned char code,
 
     result->bias_flags = RTKLIB_SHARED_BIAS_CROSS_FAMILY;
     if (!cross_family_in_scope(system, family, code))
-        return system_wide_bias(eph, system, code, result);
+        return system_wide_bias(eph, system, family, code, result);
     if (system == SYS_CMP) {
         result->bias_flags |= RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING;
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
