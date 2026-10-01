@@ -1960,8 +1960,8 @@ static int stateless_query_valid(const rtklib_shared_state_query_t *query,
 {
     return request_is_valid(query, satellite) &&
            query->selected_record_id == 0 && query->reserved[0] == 0 &&
-           (query->reserved[1] == 0 ||
-            query->reserved[1] == RTKLIB_SHARED_EVAL_CHECK_AGE);
+           (query->reserved[1] & ~(RTKLIB_SHARED_EVAL_CHECK_AGE |
+                                   RTKLIB_SHARED_EVAL_CROSS_FAMILY)) == 0;
 }
 
 /* ABI 1.5: whether the record is within the shared default selection's age
@@ -2005,11 +2005,106 @@ static int stateless_geph(const rtklib_shared_glo_eph_input_t *input,
                          &out->record.identity);
 }
 
+/* ABI 1.6 cross-family scope (RTKLIB issue #42): the band of an RTKLIB
+ * code ('1', '2', '5', '7', ...), from its RINEX observation code. */
+static char code_band(unsigned char code)
+{
+    const char *obs = code2obs(code, NULL);
+    return obs && obs[0] ? obs[0] : '\0';
+}
+
+static int cross_family_in_scope(int system, uint32_t record_family,
+                                 unsigned char code)
+{
+    int mask = rtklib_signal_family_mask_ext(system, code);
+    char band = code_band(code);
+
+    if (system == SYS_GPS || system == SYS_QZS)
+        return record_family == NAV_LNAV && (mask & NAV_CNAV) &&
+               !(mask & NAV_LNAV) && (band == '2' || band == '5');
+    if (system == SYS_GAL) {
+        if (record_family == NAV_INAV) return band == '5' && (mask & NAV_FNAV);
+        if (record_family == NAV_FNAV)
+            return (band == '1' || band == '7') && (mask & NAV_INAV);
+        return 0;
+    }
+    if (system == SYS_CMP)
+        return (record_family == NAV_D1 || record_family == NAV_D2 ||
+                record_family == NAV_D1D2) &&
+               !(mask & (NAV_D1 | NAV_D2 | NAV_D1D2)) &&
+               (mask & (NAV_CNV1 | NAV_CNV2 | NAV_CNV3));
+    return 0;
+}
+
+/* Whether a record that does not match the request serves it by the
+ * cross-family flag: the same satellite, a record family outside the
+ * requested families, and a combination in the frozen scope. */
+static int cross_family_matches(const shared_record_t *record,
+                                const rtklib_shared_state_query_t *query,
+                                int satellite)
+{
+    int system;
+
+    if (!(query->reserved[1] & RTKLIB_SHARED_EVAL_CROSS_FAMILY)) return 0;
+    system = satsys(satellite, NULL);
+    if (record->identity.system != query->system ||
+        (int)record->identity.prn != (int)query->prn ||
+        record->kind != RTKLIB_SHARED_RECORD_EPH) return 0;
+    if (query->family_mask && (record->identity.family & query->family_mask))
+        return 0;
+    return cross_family_in_scope(system, record->identity.family,
+                                 query->rtklib_code);
+}
+
+static int cross_family_health_applies(int system)
+{
+    return system == SYS_QZS || system == SYS_GAL;
+}
+
+/* Code bias of a cross-family evaluation; see RTKLIB_SHARED_EVAL_CROSS_FAMILY. */
+static int cross_family_bias(const stateless_record_t *item, unsigned char code,
+                             rtklib_shared_bias_result_t *result)
+{
+    const eph_t *eph = &item->eph;
+    int system = public_system_to_internal(item->record.identity.system);
+    uint32_t family = item->record.identity.family;
+    char band = code_band(code);
+    double bias = NAN, gamma_a = SHARED_SQR(FREQ1 / FREQ5), gamma_b = SHARED_SQR(FREQ1 / FREQ7);
+
+    result->bias_flags = RTKLIB_SHARED_BIAS_CROSS_FAMILY;
+    if (system == SYS_CMP) {
+        result->bias_flags |= RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING;
+        result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
+        return RTKLIB_SHARED_UNSUPPORTED;
+    }
+    if (system == SYS_GAL &&
+        rtklib_signal_code_bias_selected_ext(system, (int)family, code, eph,
+                                             NULL, &bias, NULL) > 0) {
+        /* The record's own rule (FNAV E1). */
+    }
+    else if (system == SYS_GAL && family == NAV_INAV && band == '5')
+        bias = CLIGHT * (eph->tgd[1] + (gamma_a - 1.0) * eph->tgd[0]);
+    else if (system == SYS_GAL && family == NAV_FNAV && band == '7')
+        bias = CLIGHT * (eph->tgd[0] + (gamma_b - 1.0) * eph->tgd[1]);
+    else if (system == SYS_GPS || system == SYS_QZS) {
+        bias = CLIGHT * (band == '2' ? SHARED_SQR(FREQ1 / FREQ2) : gamma_a) *
+               eph->tgd[0];
+        result->bias_flags |= RTKLIB_SHARED_BIAS_ISC_MISSING;
+    }
+    if (!isfinite(bias)) {
+        result->status = RTKLIB_SHARED_QUERY_FAILED;
+        return RTKLIB_SHARED_CALL_FAILED;
+    }
+    result->raw_code_bias_m = bias;
+    result->status = RTKLIB_SHARED_QUERY_AVAILABLE;
+    return RTKLIB_SHARED_OK;
+}
+
 static int stateless_state(const stateless_record_t *item, int valid,
                            const rtklib_shared_state_query_t *query,
                            rtklib_shared_state_result_t *result)
 {
-    int satellite, stat;
+    int satellite, stat, cross;
     uint32_t declared;
 
     if (!result || !valid_header(result->abi_version, result->struct_size,
@@ -2022,7 +2117,8 @@ static int stateless_state(const stateless_record_t *item, int valid,
     if (!valid || !stateless_query_valid(query, &satellite))
         return RTKLIB_SHARED_INVALID_ARGUMENT;
     result->identity = item->record.identity;
-    if (!record_matches_request(&item->record, query, satellite)) {
+    cross = !record_matches_request(&item->record, query, satellite);
+    if (cross && !cross_family_matches(&item->record, query, satellite)) {
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
     }
@@ -2037,6 +2133,14 @@ static int stateless_state(const stateless_record_t *item, int valid,
                                 &item->geph : NULL,
                             query->evaluation_time, query->rtklib_code, 1,
                             result);
+    if (cross && stat > 0) {
+        result->eval_flags = RTKLIB_SHARED_RESULT_CROSS_FAMILY;
+        if (!cross_family_health_applies(public_system_to_internal(
+                item->record.identity.system))) {
+            result->health = RTKLIB_SHARED_HEALTH_UNKNOWN;
+            result->eval_flags |= RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE;
+        }
+    }
     if (stat == RTKLIB_SHARED_UNSUPPORTED) {
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
@@ -2053,7 +2157,7 @@ static int stateless_bias(const stateless_record_t *item, int valid,
                           const rtklib_shared_state_query_t *query,
                           rtklib_shared_bias_result_t *result)
 {
-    int satellite;
+    int satellite, cross;
 
     if (!result || !valid_header(result->abi_version, result->struct_size,
                                  sizeof(*result)) ||
@@ -2063,7 +2167,8 @@ static int stateless_bias(const stateless_record_t *item, int valid,
     if (!valid || !stateless_query_valid(query, &satellite))
         return RTKLIB_SHARED_INVALID_ARGUMENT;
     result->identity = item->record.identity;
-    if (!record_matches_request(&item->record, query, satellite)) {
+    cross = !record_matches_request(&item->record, query, satellite);
+    if (cross && !cross_family_matches(&item->record, query, satellite)) {
         result->status = RTKLIB_SHARED_QUERY_UNSUPPORTED;
         return RTKLIB_SHARED_UNSUPPORTED;
     }
@@ -2071,6 +2176,7 @@ static int stateless_bias(const stateless_record_t *item, int valid,
         result->status = RTKLIB_SHARED_QUERY_UNAVAILABLE;
         return RTKLIB_SHARED_UNAVAILABLE;
     }
+    if (cross) return cross_family_bias(item, query->rtklib_code, result);
     return bias_payload(&item->record,
                         item->record.kind == RTKLIB_SHARED_RECORD_EPH ?
                             &item->eph : NULL,

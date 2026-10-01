@@ -1276,8 +1276,8 @@ static int check_stateless_age_one(const rtklib_shared_eph_input_t *eph,
         }
     }
     (*records)++;
-    /* Only RTKLIB_SHARED_EVAL_CHECK_AGE is a valid flag. */
-    query.reserved[1] = 2;
+    /* Only RTKLIB_SHARED_EVAL_CHECK_AGE and _CROSS_FAMILY are flags. */
+    query.reserved[1] = 4;
     init_state_result(&stateless);
     CHECK((eph ? rtklib_shared_state_eval_eph(eph, &query, &stateless) :
            rtklib_shared_state_eval_glo_eph(geph, &query, &stateless)) ==
@@ -1307,6 +1307,145 @@ static int check_stateless_age(const nav_t *nav)
     CHECK(records >= 15, "too few records exercise the stateless age check");
     printf("PASS stateless age records=%zu/%d checks=%zu\n", records,
            nav->n + nav->ng, checked);
+    return 0;
+}
+
+/* ABI 1.6 cross-family evaluation (RTKLIB issue #42).  The expected scope
+ * is listed here independently of the implementation. */
+static int expected_cross_scope(int system, int family, unsigned char code)
+{
+    static const unsigned char lnav[] = {
+        CODE_L2S, CODE_L2L, CODE_L2X, CODE_L5I, CODE_L5Q, CODE_L5X
+    };
+    static const unsigned char inav[] = {CODE_L5I, CODE_L5Q, CODE_L5X};
+    static const unsigned char fnav[] = {
+        CODE_L1B, CODE_L1C, CODE_L1X, CODE_L7I, CODE_L7Q, CODE_L7X
+    };
+    static const unsigned char d1d2[] = {
+        CODE_L1D, CODE_L1P, CODE_L1X, CODE_L5P, CODE_L5X, CODE_L7D
+    };
+    const unsigned char *list = NULL;
+    size_t n = 0, i;
+
+    if ((system == SYS_GPS || system == SYS_QZS) && family == NAV_LNAV) {
+        list = lnav; n = sizeof(lnav);
+    } else if (system == SYS_GAL && family == NAV_INAV) {
+        list = inav; n = sizeof(inav);
+    } else if (system == SYS_GAL && family == NAV_FNAV) {
+        list = fnav; n = sizeof(fnav);
+    } else if (system == SYS_CMP &&
+               (family == NAV_D1 || family == NAV_D2 || family == NAV_D1D2)) {
+        list = d1d2; n = sizeof(d1d2);
+    }
+    for (i = 0; i < n; i++) if (list[i] == code) return 1;
+    return 0;
+}
+
+static int check_stateless_cross_family(const nav_t *nav)
+{
+    const double gamma2 = (FREQ1 / FREQ2) * (FREQ1 / FREQ2);
+    const double gamma5 = (FREQ1 / FREQ5) * (FREQ1 / FREQ5);
+    const double gamma7 = (FREQ1 / FREQ7) * (FREQ1 / FREQ7);
+    rtklib_shared_eph_input_t eph;
+    rtklib_shared_state_query_t query;
+    rtklib_shared_state_result_t own, cross;
+    rtklib_shared_bias_result_t bias;
+    size_t in_scope = 0, out_of_scope = 0;
+    int i, code, own_code, system, family, mask, stat, j;
+
+    for (i = 0; i < nav->n; i++) {
+        const eph_t *e = &nav->eph[i];
+        fill_eph_input(e, &eph);
+        system = internal_system(eph.system);
+        family = (int)eph.family;
+        /* The record's own state, at t_oe, for any code it serves. */
+        own_code = 0;
+        for (code = 1; code <= MAXCODE && !own_code; code++) {
+            init_state_query(&query, eph.system, eph.prn, eph.family,
+                             (unsigned char)code, eph.toe, 0);
+            init_state_result(&own);
+            if (rtklib_shared_state_eval_eph(&eph, &query, &own) ==
+                RTKLIB_SHARED_OK) own_code = code;
+        }
+        if (!own_code) continue;
+        for (code = 1; code <= MAXCODE; code++) {
+            mask = rtklib_signal_family_mask_ext(system, (unsigned char)code);
+            if (!mask || !(mask & ~family)) continue;
+            if (code == own_code) continue;
+            /* The signal's own families, without the record's. */
+            init_state_query(&query, eph.system, eph.prn,
+                             (uint32_t)(mask & ~family), (unsigned char)code,
+                             eph.toe, 0);
+            init_state_result(&cross);
+            CHECK(rtklib_shared_state_eval_eph(&eph, &query, &cross) ==
+                      RTKLIB_SHARED_UNSUPPORTED,
+                  "a foreign-family code was served without the flag");
+            query.reserved[1] = RTKLIB_SHARED_EVAL_CROSS_FAMILY;
+            init_state_result(&cross);
+            stat = rtklib_shared_state_eval_eph(&eph, &query, &cross);
+            init_bias_result(&bias);
+            if (!expected_cross_scope(system, family, (unsigned char)code)) {
+                CHECK(stat == RTKLIB_SHARED_UNSUPPORTED &&
+                      cross.eval_flags == 0 &&
+                      rtklib_shared_bias_eval_eph(&eph, &query, &bias) ==
+                          RTKLIB_SHARED_UNSUPPORTED,
+                      "an out-of-scope cross-family code was served");
+                out_of_scope++;
+                continue;
+            }
+            CHECK(stat == RTKLIB_SHARED_OK && cross.state_valid,
+                  "an in-scope cross-family state failed");
+            for (j = 0; j < 3; j++) {
+                CHECK(same_bits(cross.position_ecef_m[j], own.position_ecef_m[j]) &&
+                      same_bits(cross.velocity_ecef_mps[j], own.velocity_ecef_mps[j]),
+                      "cross-family state differs from the record's own");
+            }
+            CHECK(same_bits(cross.clock_bias_s, own.clock_bias_s) &&
+                  same_bits(cross.clock_drift_sps, own.clock_drift_sps),
+                  "cross-family clock differs from the record's own");
+            if (system == SYS_GPS || system == SYS_CMP) {
+                CHECK(cross.eval_flags == (RTKLIB_SHARED_RESULT_CROSS_FAMILY |
+                          RTKLIB_SHARED_RESULT_HEALTH_NOT_APPLICABLE) &&
+                      cross.health == RTKLIB_SHARED_HEALTH_UNKNOWN,
+                      "cross-family health was applied to an uncovered signal");
+            } else {
+                CHECK(cross.eval_flags == RTKLIB_SHARED_RESULT_CROSS_FAMILY &&
+                      cross.health != RTKLIB_SHARED_HEALTH_UNKNOWN,
+                      "cross-family health was dropped for a covered signal");
+            }
+            stat = rtklib_shared_bias_eval_eph(&eph, &query, &bias);
+            if (system == SYS_CMP) {
+                CHECK(stat == RTKLIB_SHARED_UNSUPPORTED &&
+                      bias.bias_flags == (RTKLIB_SHARED_BIAS_CROSS_FAMILY |
+                          RTKLIB_SHARED_BIAS_GROUP_DELAY_MISSING),
+                      "BDS B-CNAV group delay was not reported missing");
+            } else {
+                double expected;
+                uint32_t flags = RTKLIB_SHARED_BIAS_CROSS_FAMILY;
+                char band = code2obs((unsigned char)code, NULL)[0];
+                if (system == SYS_GAL && family == NAV_INAV)
+                    expected = CLIGHT * (e->tgd[1] + (gamma5 - 1.0) * e->tgd[0]);
+                else if (system == SYS_GAL && band == '1')
+                    expected = CLIGHT * e->tgd[0];
+                else if (system == SYS_GAL)
+                    expected = CLIGHT * (e->tgd[0] + (gamma7 - 1.0) * e->tgd[1]);
+                else {
+                    expected = CLIGHT * (band == '2' ? gamma2 : gamma5) * e->tgd[0];
+                    flags |= RTKLIB_SHARED_BIAS_ISC_MISSING;
+                }
+                CHECK(stat == RTKLIB_SHARED_OK &&
+                      bias.status == RTKLIB_SHARED_QUERY_AVAILABLE &&
+                      bias.bias_flags == flags &&
+                      fabs(bias.raw_code_bias_m - expected) <= 1E-12,
+                      "cross-family code bias differs from the frozen rule");
+            }
+            in_scope++;
+        }
+    }
+    CHECK(in_scope >= 20 && out_of_scope > 0,
+          "the cross-family scope was not exercised");
+    printf("PASS stateless cross-family in_scope=%zu out_of_scope=%zu\n",
+           in_scope, out_of_scope);
     return 0;
 }
 
@@ -2086,6 +2225,8 @@ int main(int argc, char **argv)
           "stateless evaluation is not equivalent to the store query");
     CHECK(check_stateless_age(&private_nav) == 0,
           "stateless age check is not the default selection's");
+    CHECK(check_stateless_cross_family(&private_nav) == 0,
+          "stateless cross-family evaluation is not the frozen scope");
 
     /* Week 3551 overflows gpst2time()/bdt2time()'s historical int product on
      * this RTKLIB build.  Reject it at the public boundary rather than
