@@ -222,3 +222,32 @@ jobs:
           }
 
           Write-Host "GPSCNAVEPHA=$gpscnavCount GPSL1CEPHEMA=$gpsl1cCount"
+
+      - name: Functional test RINEX folder input
+        shell: powershell
+        working-directory: app/rnx2unicore
+        run: |
+          $fixture = "..\..\tests\modern_orbit\fixtures\brd400_2024030_modern_orbit.rnx"
+          $folder = "rinex_folder_ci"
+          New-Item -ItemType Directory -Force $folder | Out-Null
+          Copy-Item $fixture "$folder\a.rnx"
+          Copy-Item $fixture "$folder\b.rnx"
+          Set-Content "$folder\ignore.txt" "not a RINEX file"
+
+          .\rnx2unicore.exe -i $folder -o folder_ci.log
+
+          $lines = @(Get-Content folder_ci.log)
+          $gpscnav = @($lines | Where-Object { $_.StartsWith("#GPSCNAVEPHA,") })
+          $gpsl1c = @($lines | Where-Object { $_.StartsWith("#GPSL1CEPHEMA,") })
+
+          if ($lines.Count -ne 66) {
+            throw "Expected 66 records from two RINEX files in folder, got $($lines.Count)"
+          }
+          if ($gpscnav.Count -ne 42) {
+            throw "Expected 42 GPSCNAVEPHA records from folder input, got $($gpscnav.Count)"
+          }
+          if ($gpsl1c.Count -ne 24) {
+            throw "Expected 24 GPSL1CEPHEMA records from folder input, got $($gpsl1c.Count)"
+          }
+
+          Write-Host "Folder input PASS: total=$($lines.Count) GPSCNAVEPHA=$($gpscnav.Count) GPSL1CEPHEMA=$($gpsl1c.Count)"
