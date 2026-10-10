@@ -18,12 +18,20 @@ The script locates Visual Studio through `vswhere.exe`, initializes the x64 MSVC
 rnx2unicore.exe -i brdc0010.26r -i brdc0020.26r -o gpscnav.log
 ```
 
-Multiple `-i` arguments are supported and are read into the same RTKLIB `nav_t` container before output.
+`-i` accepts either a RINEX navigation file or a folder. Multiple `-i` arguments are supported and are read into the same RTKLIB `nav_t` container before output.
 
 ```text
 Usage:
-  rnx2unicore -i <rinex_nav> [-i <rinex_nav> ...] -o <output>
+  rnx2unicore -i <rinex_nav_or_folder> [-i <rinex_nav_or_folder> ...] -o <output>
 ```
+
+Folder example:
+
+```bat
+rnx2unicore.exe -i E:\\rinex\\day218 -o gpscnav.log
+```
+
+When `-i` is a folder, the converter scans the files directly under that folder (non-recursive) and passes them through the RTKLIB RINEX reader. Files that do not contain readable RINEX navigation data are ignored. RINEX files from all supplied files/folders are combined before CNAV/CNV2 records are sorted and written. Existing RTKLIB wildcard/decompression handling is reused, so supported compressed RINEX inputs continue to work.
 
 ## Output message mapping
 
